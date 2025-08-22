@@ -25,7 +25,10 @@ func init() {
 }
 
 func main() {
-	delete_planka_projects()
+	errr := delete_planka_projects()
+	if errr != nil {
+		log.Fatalf("Error deleting Planka projects: %v", errr)
+	}
 
 	raw_users, err := get_kaiten_users()
 
