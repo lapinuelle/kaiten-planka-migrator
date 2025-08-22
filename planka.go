@@ -16,12 +16,53 @@ type PlankaProject struct {
 	Type        string `json:"type"`
 }
 
+type PlankaBoard struct {
+	Position float64 `json:"position"`
+	Name     string  `json:"name"`
+}
+
+type CreatedPlankaBoard struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+}
+
 type CreatedProject struct {
 	ID             string  `json:"id"`
 	Description    string  `json:"desc"`
 	Name           string  `json:"name"`
 	KaitenSpaceID  float64 `json:"kaiten_space_id"`
 	KaitenSpaceUID string  `json:"kaiten_space_uid"`
+}
+
+func delete_planka_projects() error {
+	availableProjects, err := get_planka_projects()
+	if err != nil {
+		return fmt.Errorf("error fetching existing projects: %w", err)
+	}
+	for _, project := range availableProjects {
+		plankaUrl, exists := os.LookupEnv("PLANKA_URL")
+		if !exists {
+			return fmt.Errorf("PLANKA_URL environment variable is not set")
+		}
+		plankaToken, exists := os.LookupEnv("PLANKA_TOKEN")
+		if !exists {
+			return fmt.Errorf("PLANKA_TOKEN environment variable is not set")
+		}
+		req, err := http.NewRequest("DELETE", plankaUrl+"/api/projects/"+project.ID, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Add("Authorization", "Bearer "+plankaToken)
+		client := &http.Client{}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Println("Error sending request:", err)
+			return err
+		}
+		defer resp.Body.Close() // Ensure the response body is closed
+	}
+	return nil
 }
 
 func get_planka_users_emails() ([]string, error) {
@@ -152,8 +193,8 @@ func get_planka_projects() (map[string]CreatedProject, error) {
 				ID:             projectMap["id"].(string),
 				Description:    projectDescription,
 				Name:           projectMap["name"].(string),
-				KaitenSpaceID:  0,  // Placeholder, will be set later
-				KaitenSpaceUID: "", // Placeholder, will be set later
+				KaitenSpaceID:  0,
+				KaitenSpaceUID: "",
 			}
 		}
 	}
@@ -217,14 +258,73 @@ func create_planka_project(space KaitenSpace) (CreatedProject, error) {
 		}
 
 		var createdProject CreatedProject
-		if err := json.NewDecoder(resp.Body).Decode(&createdProject); err != nil {
-			return CreatedProject{}, fmt.Errorf("error decoding response body: %w", err)
+		var unmBody interface{}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Println("Error reading response body:", err)
+			return CreatedProject{}, err
 		}
+
+		if err := json.Unmarshal(body, &unmBody); err != nil {
+			log.Fatalf("failed to parse JSON: %w", err)
+		}
+		// if err := json.NewDecoder(resp.Body).Decode(&createdProject); err != nil {
+		// 	return CreatedProject{}, fmt.Errorf("error decoding response body: %w", err)
+		// }
+		createdProject.ID = unmBody.(map[string]interface{})["item"].(map[string]interface{})["id"].(string)
+		createdProject.Description = ""
+		createdProject.Name = unmBody.(map[string]interface{})["item"].(map[string]interface{})["name"].(string)
 		createdProject.KaitenSpaceID = space.ID
 		createdProject.KaitenSpaceUID = space.UID
 		fmt.Printf("%s\n", project)
 		return createdProject, nil
 	}
+}
 
-	return CreatedProject{}, fmt.Errorf("project %s not found", project.Name)
+func create_planka_board(projectId string, board KaitenBoard, prefix string) (CreatedPlankaBoard, error) {
+	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
+	if !exists {
+		return CreatedPlankaBoard{}, fmt.Errorf("PLANKA_URL environment variable is not set")
+	}
+	plankaToken, exists := os.LookupEnv("PLANKA_TOKEN")
+	if !exists {
+		return CreatedPlankaBoard{}, fmt.Errorf("PLANKA_TOKEN environment variable is not set")
+	}
+
+	boardToCreate := PlankaBoard{
+		Name:     prefix + board.Title,
+		Position: 0,
+	}
+
+	boardJson, err := json.Marshal(boardToCreate)
+	if err != nil {
+		return CreatedPlankaBoard{}, fmt.Errorf("error marshalling project data: %w", err)
+	}
+	req, err := http.NewRequest("POST", plankaUrl+"/api/projects/"+projectId+"/boards", bytes.NewBuffer(boardJson))
+	if err != nil {
+		return CreatedPlankaBoard{}, err
+	}
+	req.Header.Add("Authorization", "Bearer "+plankaToken)
+	req.Header.Add("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	fmt.Printf("%s\n", resp)
+	if err != nil {
+		return CreatedPlankaBoard{}, fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return CreatedPlankaBoard{}, fmt.Errorf("failed to create board, status code: %d", resp.StatusCode)
+	}
+
+	var createdBoard CreatedPlankaBoard
+	if err := json.NewDecoder(resp.Body).Decode(&createdBoard); err != nil {
+		return CreatedPlankaBoard{}, fmt.Errorf("error decoding response body: %w", err)
+	}
+
+	// fmt.Printf("%s\n", project)
+	return createdBoard, nil
+
 }

@@ -25,6 +25,7 @@ func init() {
 }
 
 func main() {
+	delete_planka_projects()
 
 	raw_users, err := get_kaiten_users()
 
@@ -66,17 +67,54 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error fetching Kaiten spaces: %v", err)
 	}
+	plankaProjects := make(map[string]CreatedProject)
 	for _, space := range spaces {
+		if err != nil {
+			log.Fatalf("Error getting boards for space")
+		}
+
 		if space.ParentID == "" {
-			fmt.Printf("Project to be created: %s\n", space.Name)
+			// fmt.Printf("Project to be created: %s\n", space.Name)
 			plankaProject, err := create_planka_project(space)
+			plankaProjects[plankaProject.KaitenSpaceUID] = plankaProject
 			if err != nil {
 				log.Printf("Error creating Planka project for space %s: %v", space.Name, err)
 				continue
 			}
-			fmt.Printf("Created Planka project: %s with ID: %f\n", plankaProject.Name, plankaProject.ID)
+			fmt.Printf("Planka project: %s with ID: %s\n", plankaProject.Name, plankaProject.ID)
+
 			// Here you can add code to create columns
 		}
+	}
+	for _, space := range spaces {
+		boardTitlePrefix := ""
+		boards, err := get_kaiten_boards_for_space(space)
+		if err != nil {
+			log.Fatalf("Error getting boards for space")
+		}
+		if len(boards) > 1 {
+			boardTitlePrefix = space.Name + ": "
+			fmt.Printf("%s\n", boardTitlePrefix)
+		}
+
+		spaceIdforBoard := space.UID
+		if space.ParentID != "" {
+			spaceIdforBoard = space.ParentID
+		}
+		spaceUIDforBoardCreation := spaces[spaceIdforBoard].UID
+		for _, kaiten_board := range boards {
+			if len(boards) < 2 {
+				kaiten_board.Title = space.Name
+			}
+			fmt.Printf("Board named %s created in project %s\n", boardTitlePrefix+kaiten_board.Title, plankaProjects[spaceUIDforBoardCreation].Name)
+			board, err := create_planka_board(plankaProjects[spaceUIDforBoardCreation].ID, kaiten_board, boardTitlePrefix)
+			if err != nil {
+				log.Printf("Error creating Planka board for project %s: %v", plankaProjects[spaceUIDforBoardCreation].ID, err)
+				continue
+			}
+			fmt.Printf("%s\n", board)
+		}
+
 	}
 
 }
