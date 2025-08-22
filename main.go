@@ -77,7 +77,7 @@ func main() {
 		}
 
 		if space.ParentID == "" {
-			// fmt.Printf("Project to be created: %s\n", space.Name)
+			// Creating projects for top-level spaces
 			plankaProject, err := create_planka_project(space)
 			plankaProjects[plankaProject.KaitenSpaceUID] = plankaProject
 			if err != nil {
@@ -86,9 +86,11 @@ func main() {
 			}
 			fmt.Printf("Planka project: %s with ID: %s\n", plankaProject.Name, plankaProject.ID)
 
-			// Here you can add code to create columns
 		}
 	}
+	// Creating boards for each project
+	// If there are multiple boards in a space, they will be prefixed with the space name
+	// If there is only one board, it will be named after the space
 	for _, space := range spaces {
 		boardTitlePrefix := ""
 		boards, err := get_kaiten_boards_for_space(space)
@@ -115,7 +117,21 @@ func main() {
 				log.Printf("Error creating Planka board for project %s: %v", plankaProjects[spaceUIDforBoardCreation].ID, err)
 				continue
 			}
-			fmt.Printf("%s\n", board)
+			columns, err := get_kaiten_columns_for_board(kaiten_board.ID)
+			if err != nil {
+				log.Printf("Error getting columns for board %s: %v", board.ID, err)
+				continue
+			}
+			for _, column := range columns {
+				column.Type = "active"
+				plankaColumn, err := create_planka_list(board.ID, column)
+				if err != nil {
+					log.Printf("Error creating Planka column for board %s: %v", board.ID, err)
+					continue
+				}
+				fmt.Printf("Created Planka column: %s in board: %s\n", plankaColumn.Name, board.Name)
+			}
+
 		}
 
 	}

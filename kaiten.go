@@ -23,6 +23,12 @@ type KaitenBoard struct {
 	Title string  `json:"title"`
 }
 
+type KaitenColumn struct {
+	Position float64 `json:"position"`
+	Name     string  `json:"name"`
+	Type     string  `json:"type"`
+}
+
 func kaiten_api_call(url string, method string) ([]byte, error) {
 	kaitenUrl, exists := os.LookupEnv("KAITEN_URL")
 	if !exists {
@@ -131,4 +137,27 @@ func get_kaiten_boards_for_space(Space KaitenSpace) ([]KaitenBoard, error) {
 	time.Sleep(time.Millisecond * 300)
 	return boards, nil
 
+}
+
+func get_kaiten_columns_for_board(boardId float64) ([]KaitenColumn, error) {
+	body, err := kaiten_api_call("/api/latest/boards/"+strconv.FormatFloat(boardId, 'f', -1, 64)+"/columns", "GET")
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return nil, err
+	}
+
+	var json_columns []interface{}
+
+	if err := json.Unmarshal(body, &json_columns); err != nil {
+		fmt.Println("Error parsing JSON:", err)
+		return nil, err
+	}
+	var columns []KaitenColumn
+	for _, col := range json_columns {
+		columns = append(columns, KaitenColumn{
+			Position: col.(map[string]interface{})["sort_order"].(float64),
+			Name:     col.(map[string]interface{})["title"].(string),
+		})
+	}
+	return columns, nil
 }

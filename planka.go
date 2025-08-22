@@ -35,6 +35,11 @@ type CreatedProject struct {
 	Boards         []string `json:"boards,omitempty"`
 }
 
+type CreatedList struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 func planka_api_call(json_data []byte, url string, call_type string) ([]byte, error) {
 	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
 	if !exists {
@@ -248,12 +253,41 @@ func create_planka_board(projectId string, board KaitenBoard, prefix string) (Cr
 	if body == nil && err != nil {
 		return CreatedPlankaBoard{}, fmt.Errorf("failed to create user")
 	}
-
-	var createdBoard CreatedPlankaBoard
-	err = json.Unmarshal(body, &createdBoard)
+	var createdBoardItem interface{}
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return CreatedPlankaBoard{}, err
+	}
+	err = json.Unmarshal(body, &createdBoardItem)
 	if err != nil {
 		return CreatedPlankaBoard{}, fmt.Errorf("error unmarshalling response body: %w", err)
 	}
+	var createdBoard CreatedPlankaBoard
+	createdBoard.ID = createdBoardItem.(map[string]interface{})["item"].(map[string]interface{})["id"].(string)
+	createdBoard.Name = createdBoardItem.(map[string]interface{})["item"].(map[string]interface{})["name"].(string)
 	return createdBoard, nil
 
+}
+
+func create_planka_list(boardId string, column KaitenColumn) (CreatedList, error) {
+
+	listJson, err := json.Marshal(column)
+	if err != nil {
+		return CreatedList{}, fmt.Errorf("error marshalling list data: %w", err)
+	}
+
+	body, err := planka_api_call(listJson, "/api/boards/"+boardId+"/lists", "POST")
+	if body == nil && err != nil {
+		return CreatedList{}, fmt.Errorf("failed to create list")
+	}
+	var createdListItem interface{}
+	err = json.Unmarshal(body, &createdListItem)
+	if err != nil {
+		return CreatedList{}, fmt.Errorf("error unmarshalling response body: %w", err)
+	}
+	var createdList CreatedList = CreatedList{
+		ID:   createdListItem.(map[string]interface{})["item"].(map[string]interface{})["id"].(string),
+		Name: createdListItem.(map[string]interface{})["item"].(map[string]interface{})["name"].(string),
+	}
+	return createdList, nil
 }
