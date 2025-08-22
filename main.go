@@ -62,5 +62,21 @@ func main() {
 			}
 		}
 	}
+	spaces, err := get_kaiten_spaces()
+	if err != nil {
+		log.Fatalf("Error fetching Kaiten spaces: %v", err)
+	}
+	for _, space := range spaces {
+		if space.ParentID == "" {
+			fmt.Printf("Project to be created: %s\n", space.Name)
+			plankaProject, err := create_planka_project(space)
+			if err != nil {
+				log.Printf("Error creating Planka project for space %s: %v", space.Name, err)
+				continue
+			}
+			fmt.Printf("Created Planka project: %s with ID: %f\n", plankaProject.Name, plankaProject.ID)
+			// Here you can add code to create columns
+		}
+	}
 
 }
