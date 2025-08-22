@@ -23,7 +23,7 @@ type KaitenBoard struct {
 	Title string  `json:"title"`
 }
 
-func get_kaiten_users() (interface{}, error) {
+func kaiten_api_call(url string, method string) ([]byte, error) {
 	kaitenUrl, exists := os.LookupEnv("KAITEN_URL")
 	if !exists {
 		return nil, fmt.Errorf("KAITEN_URL environment variable is not set")
@@ -32,7 +32,7 @@ func get_kaiten_users() (interface{}, error) {
 	if !exists {
 		return nil, fmt.Errorf("KAITEN_TOKEN environment variable is not set")
 	}
-	req, err := http.NewRequest("GET", kaitenUrl+"/api/latest/company/users", nil)
+	req, err := http.NewRequest(method, kaitenUrl+url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -57,32 +57,13 @@ func get_kaiten_users() (interface{}, error) {
 	return body, err
 }
 
+func get_kaiten_users() (interface{}, error) {
+	return kaiten_api_call("/api/latest/users", "GET")
+}
+
 func get_kaiten_spaces() (map[string]KaitenSpace, error) {
-	kaitenUrl, exists := os.LookupEnv("KAITEN_URL")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_URL environment variable is not set")
-	}
-	kaitenToken, exists := os.LookupEnv("KAITEN_TOKEN")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_TOKEN environment variable is not set")
-	}
-	req, err := http.NewRequest("GET", kaitenUrl+"/api/latest/spaces", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("Accept", "application/json")
-	req.Header.Add("Authorization", "Bearer "+kaitenToken)
-	req.Header.Add("Content-Type", "application/json")
-	client := &http.Client{}
+	body, err := kaiten_api_call("/api/latest/spaces", "GET")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return nil, err
-	}
-	defer resp.Body.Close() // Ensure the response body is closed
-
-	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -100,10 +81,6 @@ func get_kaiten_spaces() (map[string]KaitenSpace, error) {
 			var parent_uid string
 			if spaceMap["parent_entity_uid"] != nil {
 				parent_uid = spaceMap["parent_entity_uid"].(string)
-				// parentSpace := spaces[spaceMap["parent_entity_uid"].(string)]
-				// fmt.Printf("Parent Space: %s, Space: %s\n", parentSpace.Name, spaceMap["title"].(string))
-				// parentSpace.ChildIdDs = append(spaces[spaceMap["parent_entity_uid"].(string)].ChildIdDs, spaceMap["uid"].(string))
-				// spaces[spaceMap["parent_entity_uid"].(string)] = parentSpace
 			} else {
 				parent_uid = ""
 			}
@@ -133,31 +110,7 @@ func get_kaiten_spaces() (map[string]KaitenSpace, error) {
 }
 
 func get_kaiten_boards_for_space(Space KaitenSpace) ([]KaitenBoard, error) {
-	kaitenUrl, exists := os.LookupEnv("KAITEN_URL")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_URL environment variable is not set")
-	}
-	kaitenToken, exists := os.LookupEnv("KAITEN_TOKEN")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_TOKEN environment variable is not set")
-	}
-	spaceId := Space.ID
-	req, err := http.NewRequest("GET", kaitenUrl+"/api/latest/spaces/"+strconv.FormatFloat(spaceId, 'f', -1, 64)+"/boards", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("Accept", "application/json")
-	req.Header.Add("Authorization", "Bearer "+kaitenToken)
-	req.Header.Add("Content-Type", "application/json")
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return nil, err
-	}
-	defer resp.Body.Close() // Ensure the response body is closed
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := kaiten_api_call("/api/latest/spaces/"+strconv.FormatFloat(Space.ID, 'f', -1, 64)+"/boards", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
