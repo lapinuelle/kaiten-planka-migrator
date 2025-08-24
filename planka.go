@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 )
@@ -14,6 +15,10 @@ type PlankaProject struct {
 	Name        string `json:"name"`
 	Description string `json:"desc"`
 	Type        string `json:"type"`
+}
+
+type PlankaCardMember struct {
+	UserId string `json:"userId"`
 }
 
 type PlankaBoard struct {
@@ -38,6 +43,37 @@ type CreatedProject struct {
 type CreatedList struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type PlankaBoardMember struct {
+	UserId     string `json:"userId"`
+	Role       string `json:"role"`       //whitelist (editor, viewer)
+	CanComment *bool  `json:"canComment"` //permisao para comentar
+}
+
+type PlankaCard struct {
+	Position    float64 `json:"position"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Type        string  `json:"type"`
+	Start       string  `json:"start,omitempty"`
+	DueDate     string  `json:"dueDate,omitempty"`
+}
+
+type PlankaUserCreds struct {
+	Email    string `json:"emailOrUsername"`
+	Password string `json:"password"`
+}
+
+type PlankaTaskList struct {
+	Position float64 `json:"position"`
+	Name     string  `json:"name"`
+}
+
+type PlankaTask struct {
+	Position    float64 `json:"position"`
+	Name        string  `json:"name"`
+	IsCompleted bool    `json:"isCompleted"`
 }
 
 func planka_api_call(json_data []byte, url string, call_type string) ([]byte, error) {
@@ -71,6 +107,117 @@ func planka_api_call(json_data []byte, url string, call_type string) ([]byte, er
 		return nil, err
 	}
 	return body, nil
+}
+
+func planka_upload_file(filepath string, url string, filename string) ([]byte, error) {
+	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
+	if !exists {
+		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
+	}
+	plankaToken, exists := os.LookupEnv("PLANKA_TOKEN")
+	if !exists {
+		return nil, fmt.Errorf("PLANKA_TOKEN environment variable is not set")
+	}
+	file, err := os.Open(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("Can't open file")
+	}
+	defer file.Close()
+	requestBody := &bytes.Buffer{}
+	writer := multipart.NewWriter(requestBody)
+	writer.WriteField("name", filename)
+	writer.WriteField("type", "file")
+	part, err := writer.CreateFormFile("file", filepath) // "file" is the form field name, "file.txt" is the filename in the request
+
+	if err != nil {
+		return nil, fmt.Errorf("Can't create writter from file")
+	}
+	_, err = io.Copy(part, file)
+	if err != nil {
+		return nil, fmt.Errorf("Can't copy file to part")
+	}
+	err = writer.Close()
+	if err != nil {
+		return nil, fmt.Errorf("Can't close writer")
+	}
+	req, err := http.NewRequest("POST", plankaUrl+url, requestBody)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Content-Type", writer.FormDataContentType())
+	req.Header.Add("Authorization", "Bearer "+plankaToken)
+	client := &http.Client{}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error sending request:", err)
+		return nil, err
+	}
+	//defer resp.Body.Close() // Ensure the response body is closed
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return nil, err
+	}
+	return body, nil
+}
+
+func planka_api_call_for_user(json_data []byte, url string, call_type string, token string) ([]byte, error) {
+	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
+	if !exists {
+		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
+	}
+	plankaToken := token
+
+	req, err := http.NewRequest(call_type, plankaUrl+url, bytes.NewBuffer(json_data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", "Bearer "+plankaToken)
+	client := &http.Client{}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error sending request:", err)
+		return nil, err
+	}
+	//defer resp.Body.Close() // Ensure the response body is closed
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return nil, err
+	}
+	return body, nil
+}
+
+func planka_delete_users() error {
+	emails, err := get_planka_users_emails()
+	if err != nil {
+		return fmt.Errorf("error fetching Planka user emails: %w", err)
+	}
+	admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
+	if !exists {
+		return fmt.Errorf("ADMIN_EMAIL environment variable is not set")
+	}
+	for _, email := range emails {
+		if email != "" && email != admin_email {
+			id, err := get_planka_userId_by_email(email)
+			if err != nil {
+				return fmt.Errorf("error fetching Planka user ID for email %s: %w", email, err)
+			}
+			_, err = planka_api_call(nil, "/api/users/"+id, "DELETE")
+			if err != nil {
+				return fmt.Errorf("error deleting Planka user with email %s: %w", email, err)
+			}
+			fmt.Printf("Deleted user with email %s\n", email)
+		} else {
+			log.Printf("Skipping user with empty email")
+		}
+	}
+	return nil
 }
 
 func delete_planka_projects() error {
@@ -118,6 +265,28 @@ func get_planka_users_emails() ([]string, error) {
 		}
 	}
 	return emails, nil
+}
+
+func get_planka_userId_by_email(email string) (string, error) {
+	body, err := planka_api_call(nil, "/api/users", "GET")
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return "", err
+	}
+	var users map[string]interface{}
+	if err := json.Unmarshal(body, &users); err != nil {
+		log.Fatalf("failed to parse JSON: %w", err)
+	}
+	for _, user := range users["items"].([]interface{}) {
+		if user.(map[string]interface{})["email"].(string) == email {
+			if id, ok := user.(map[string]interface{})["id"].(string); ok {
+				return id, nil
+			} else {
+				log.Printf("User %s does not have a valid id", user.(map[string]interface{})["name"])
+			}
+		}
+	}
+	return "", nil
 }
 
 func create_planka_user(user PlankaUser) error {
@@ -269,6 +438,23 @@ func create_planka_board(projectId string, board KaitenBoard, prefix string) (Cr
 
 }
 
+func set_planka_board_member(boardId string, member string) error {
+	var boardMember PlankaBoardMember
+	boardMember.UserId = member
+	boardMember.Role = "editor"
+	canComment := true
+	boardMember.CanComment = &canComment
+	memberJson, err := json.Marshal(boardMember)
+	if err != nil {
+		return fmt.Errorf("error marshalling list data: %w", err)
+	}
+	body, err := planka_api_call(memberJson, "/api/boards/"+boardId+"/board-memberships", "POST")
+	if body == nil && err != nil {
+		return fmt.Errorf("failed to create list")
+	}
+	return nil
+}
+
 func create_planka_list(boardId string, column KaitenColumn) (CreatedList, error) {
 
 	listJson, err := json.Marshal(column)
@@ -290,4 +476,208 @@ func create_planka_list(boardId string, column KaitenColumn) (CreatedList, error
 		Name: createdListItem.(map[string]interface{})["item"].(map[string]interface{})["name"].(string),
 	}
 	return createdList, nil
+}
+
+func set_planka_card_member(cardId string, member string) error {
+	var boardMember PlankaCardMember
+	boardMember.UserId = member
+
+	memberJson, err := json.Marshal(boardMember)
+	if err != nil {
+		return fmt.Errorf("error marshalling list data: %w", err)
+	}
+	body, err := planka_api_call(memberJson, "/api/cards/"+cardId+"/card-memberships", "POST")
+	if body == nil && err != nil {
+		return fmt.Errorf("failed to create list")
+	}
+	return nil
+}
+
+func create_planka_card(listId string, card KaitenCard) (string, error) {
+	var plankaCard PlankaCard
+	plankaCard.Name = card.Title
+	plankaCard.Description = card.Description
+	plankaCard.Position = card.SortOrder
+	plankaCard.Type = "project"
+	if card.DueDate != "" {
+		plankaCard.DueDate = card.DueDate
+	} else {
+		if card.StartDate != "" {
+			plankaCard.Start = card.StartDate
+		}
+		if card.EndDate != "" {
+			plankaCard.DueDate = card.EndDate
+		}
+	}
+	cardJson, err := json.Marshal(plankaCard)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling card data: %w", err)
+	}
+	body, err := planka_api_call(cardJson, "/api/lists/"+listId+"/cards", "POST")
+	if body == nil && err != nil {
+		return "", fmt.Errorf("failed to create card")
+	}
+	var bodyInterface interface{}
+	err = json.Unmarshal(body, &bodyInterface)
+	if err != nil {
+		return "", fmt.Errorf("error unmarshalling response body: %w", err)
+	}
+	return bodyInterface.(map[string]interface{})["item"].(map[string]interface{})["id"].(string), nil
+}
+
+func get_planka_access_token(email string) (string, error) {
+	admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
+	if !exists {
+		return "", fmt.Errorf("PLANKA_URL environment variable is not set")
+	}
+	var user PlankaUserCreds
+	user.Email = email
+	if email == admin_email {
+		admin_password, exists := os.LookupEnv("ADMIN_PASSWORD")
+		if !exists {
+			return "", fmt.Errorf("ADMIN_PASSWORD environment variable is not set")
+		}
+		user.Password = admin_password
+	} else {
+		user.Password = "1234tempPass"
+	}
+
+	userJson, err := json.Marshal(user)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling user data: %w", err)
+	}
+	body, err := planka_api_call(userJson, "/api/access-tokens", "POST")
+	if err != nil {
+		fmt.Println("Error reading response body:", err)
+		return "", err
+	}
+	var tokenResponse map[string]interface{}
+	if err := json.Unmarshal(body, &tokenResponse); err != nil {
+		log.Fatalf("failed to parse JSON: %w", err)
+	}
+	if token, ok := tokenResponse["item"].(string); ok && token != "" {
+		return token, nil
+	} else {
+		return "", fmt.Errorf("no token found for email %s", email)
+	}
+}
+
+func create_planka_card_comment(cardId string, comment KaitenComment) error {
+	token, err := get_planka_access_token(comment.AuthorEmail)
+	if err != nil {
+		fmt.Printf("error getting Planka access token for email %s: %w", comment.AuthorEmail, err)
+		admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
+		if !exists {
+			return fmt.Errorf("PLANKA_URL environment variable is not set")
+		}
+		token, err = get_planka_access_token(admin_email)
+		if err != nil {
+			fmt.Errorf("error getting Planka access token for email %s: %w", comment.AuthorEmail, err)
+			return err
+		}
+	}
+	fmt.Printf("Using token %s for email %s\n", token, comment.AuthorEmail)
+	id, err := get_planka_userId_by_email(comment.AuthorEmail)
+	if err != nil {
+		return fmt.Errorf("error getting Planka user ID for email %s: %w", comment.AuthorEmail, err)
+	}
+	commentJson, err := json.Marshal(map[string]string{
+		"text":   comment.Text,
+		"userId": id,
+	})
+	if err != nil {
+		return fmt.Errorf("error marshalling comment data: %w", err)
+	}
+	body, err := planka_api_call_for_user(commentJson, "/api/cards/"+cardId+"/comments", "POST", token)
+	if body == nil && err != nil {
+		return fmt.Errorf("failed to create comment")
+	}
+	return nil
+}
+
+func create_planka_card_attachment(cardId string, attachment KaitenAttachment) (string, error) {
+	outputFileName := attachment.Name
+	// Create the output file
+	outputFile, err := os.Create(outputFileName)
+	if err != nil {
+		fmt.Printf("Error creating file: %v\n", err)
+		return "", err
+	}
+
+	// Make an HTTP GET request to the URL
+	response, err := http.Get(attachment.URL)
+	if err != nil {
+		fmt.Printf("Error making HTTP request: %v\n", err)
+		return "", err
+	}
+	defer response.Body.Close() // Ensure the response body is closed
+
+	// Check for a successful HTTP status code
+	if response.StatusCode != http.StatusOK {
+		fmt.Printf("Bad status code: %d %s\n", response.StatusCode, response.Status)
+		return "", fmt.Errorf("bad status code: %d", response.StatusCode)
+	}
+
+	// Copy the response body to the local file
+	_, err = io.Copy(outputFile, response.Body)
+	if err != nil {
+		fmt.Printf("Error copying data to file: %v\n", err)
+		return "", err
+	}
+	body, err := planka_upload_file(outputFileName, "/api/cards/"+cardId+"/attachments", attachment.Name)
+	if body == nil && err != nil {
+		return "", fmt.Errorf("failed to upload attachment")
+	}
+	fmt.Printf("File downloaded successfully to %s\n", outputFileName)
+	defer outputFile.Close() // Ensure the file is closed
+	err = os.Remove(outputFileName)
+	if err != nil {
+		fmt.Printf("Error deleting file: %v\n", err)
+		return "", err
+	}
+
+	return "", nil
+}
+
+func create_planka_card_tasklist(card_id string, checklist KaitenChecklist) (string, error) {
+	var tasklist PlankaTaskList
+	tasklist.Name = checklist.Name
+	tasklist.Position = 0
+	json_payload, err := json.Marshal(tasklist)
+	if err != nil {
+		fmt.Printf("Error marshalling task list to json")
+		return "", err
+	}
+	body, err := planka_api_call(json_payload, "/api/cards/"+card_id+"/task-lists", "POST")
+	if err != nil {
+		fmt.Printf("Error sending request to create tasklist")
+		return "", err
+	}
+	var response_json map[string]interface{}
+	if err := json.Unmarshal(body, &response_json); err != nil {
+		log.Fatalf("failed to parse JSON: %w", err)
+	}
+	return response_json["item"].(map[string]interface{})["id"].(string), nil
+}
+
+func create_planka_task_in_tasklist(list_id string, item KaitenChecklistItem) (string, error) {
+	var task PlankaTask
+	task.Name = item.Text
+	task.Position = 0
+	task.IsCompleted = item.Checked
+	json_payload, err := json.Marshal(task)
+	if err != nil {
+		fmt.Printf("Error marshalling task list to json")
+		return "", err
+	}
+	body, err := planka_api_call(json_payload, "/api/task-lists/"+list_id+"/tasks", "POST")
+	if err != nil {
+		fmt.Printf("Error sending request to create task")
+		return "", err
+	}
+	var response_json map[string]interface{}
+	if err := json.Unmarshal(body, &response_json); err != nil {
+		log.Fatalf("failed to parse JSON: %w", err)
+	}
+	return response_json["item"].(map[string]interface{})["id"].(string), nil
 }

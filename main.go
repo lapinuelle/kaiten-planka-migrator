@@ -25,11 +25,20 @@ func init() {
 }
 
 func main() {
+	err := planka_delete_users()
+	if err != nil {
+		log.Fatalf("Error deleting Planka users: %v", err)
+	}
 	errr := delete_planka_projects()
 	if errr != nil {
 		log.Fatalf("Error deleting Planka projects: %v", errr)
 	}
-
+	// os.Exit(0)
+	kaiten_checklists, err := read_checklists_from_file()
+	if err != nil {
+		log.Fatalf("Error reading checklists from file: %v", err)
+	}
+	fmt.Printf("%s\n", kaiten_checklists)
 	raw_users, err := get_kaiten_users()
 
 	{
@@ -122,14 +131,113 @@ func main() {
 				log.Printf("Error getting columns for board %s: %v", board.ID, err)
 				continue
 			}
+			emails, err := get_planka_users_emails()
+			if err != nil {
+				log.Fatalf("Error fetching Planka user emails: %v", err)
+			}
+			for _, email := range emails {
+				userId, err := get_planka_userId_by_email(email)
+				if err != nil {
+					log.Printf("Error getting Planka user ID for email %s: %v", email, err)
+					continue
+				}
+				err = set_planka_board_member(board.ID, userId)
+				if err != nil {
+					log.Printf("Error setting Planka board member for board %s and user %s: %v", board.ID, userId, err)
+					continue
+				}
+			}
 			for _, column := range columns {
 				column.Type = "active"
+				if board.Name == "Графика" {
+					fmt.Printf("GOTCHA!\n")
+				}
 				plankaColumn, err := create_planka_list(board.ID, column)
 				if err != nil {
 					log.Printf("Error creating Planka column for board %s: %v", board.ID, err)
 					continue
 				}
 				fmt.Printf("Created Planka column: %s in board: %s\n", plankaColumn.Name, board.Name)
+				cards, err := get_kaiten_cards_for_column(column.Id)
+				if err != nil {
+					log.Printf("Error getting cards for column %s: %v", column.Id, err)
+					continue
+				}
+				for _, card := range cards {
+
+					cardId, err := create_planka_card(plankaColumn.ID, card)
+					if card.Memders != nil {
+
+						for _, member := range card.Memders {
+							userId, err := get_planka_userId_by_email(member)
+							if err != nil {
+								log.Printf("Error getting Planka user ID for email %s: %v", member, err)
+								continue
+							}
+
+							err = set_planka_card_member(cardId, userId)
+							if err != nil {
+								log.Printf("Error setting Planka card member for card %s and user %s: %v", cardId, userId, err)
+								continue
+							}
+
+						}
+
+					}
+					if _, ok := kaiten_checklists[card.ID]; ok {
+						for _, chechlistId := range kaiten_checklists[card.ID] {
+							kaiten_list, err := get_kaiten_checklist_for_card(card.ID, chechlistId)
+							if err != nil {
+								log.Printf("Error getting checklist for card %s: %v", cardId, err)
+								continue
+							}
+							list_id, err := create_planka_card_tasklist(cardId, kaiten_list)
+							if err != nil {
+								fmt.Printf("Error creating tasklist")
+							}
+							for _, item := range kaiten_list.Items {
+								task_id, err := create_planka_task_in_tasklist(list_id, item)
+								if err != nil {
+									fmt.Printf("Error creating task: %w\n", err)
+									continue
+								}
+								fmt.Printf("Created task %s\n", task_id)
+							}
+
+						}
+					}
+					comments, err := get_kaiten_comments_for_card(card.ID)
+					if err == nil && comments != nil {
+						for _, comment := range comments {
+							err := create_planka_card_comment(cardId, comment)
+							if err != nil {
+								log.Printf("Error creating Planka comment for card %s: %v", cardId, err)
+								continue
+							}
+						}
+					}
+					attachments, err := get_kaiten_attachments_for_card(card.ID)
+					if err != nil {
+						log.Printf("Error getting attachments for card %s: %v", card.ID, err)
+					}
+					if attachments != nil {
+						fmt.Printf("Got attachments for card %s: %v\n", cardId, attachments)
+						for _, attachment := range attachments {
+							_, err := create_planka_card_attachment(cardId, attachment)
+							if err != nil {
+								log.Printf("Error creating Planka attachment for card %s: %v", cardId, err)
+								continue
+							}
+						}
+					}
+
+					if err != nil {
+						log.Printf("Error creating Planka card in list %s: %v", plankaColumn.ID, err)
+						continue
+					}
+					fmt.Printf("Created Planka card: %s in list: %s\n", cardId, plankaColumn.Name)
+				}
+
 			}
 
 		}
