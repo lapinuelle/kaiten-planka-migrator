@@ -108,47 +108,77 @@ type PlankaLabelForCard struct {
 	ID string `json:"labelId"`
 }
 
-func planka_api_call(json_data []byte, url string, call_type string) ([]byte, error) {
-	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
+func getEnv(name string) (string, error) {
+	val, exists := os.LookupEnv(name)
 	if !exists {
-		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
+		return "", fmt.Errorf("%s environment variable is not set", name)
 	}
-	plankaToken, exists := os.LookupEnv("PLANKA_TOKEN")
-	if !exists {
-		return nil, fmt.Errorf("PLANKA_TOKEN environment variable is not set")
-	}
+	return val, nil
+}
 
-	req, err := http.NewRequest(call_type, plankaUrl+url, bytes.NewBuffer(json_data))
+func plankaAPICall(json_data []byte, endpoint string, method string) ([]byte, error) {
+
+	plankaUrl, err := getEnv("PLANKA_URL")
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Authorization", "Bearer "+plankaToken)
+	plankaToken, err := getEnv("PLANKA_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+
+	validMethods := map[string]bool{
+		"GET":    true,
+		"POST":   true,
+		"PUT":    true,
+		"DELETE": true,
+		"PATCH":  true,
+	}
+	if !validMethods[method] {
+		return nil, fmt.Errorf("invalid HTTP method: %s", method)
+	}
+
+	var req *http.Request
+	if method == "GET" {
+		req, err = http.NewRequest(method, plankaUrl+endpoint, nil)
+	} else {
+		req, err = http.NewRequest(method, plankaUrl+endpoint, bytes.NewBuffer(json_data))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+plankaToken)
+
 	client := &http.Client{}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return nil, err
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	//defer resp.Body.Close() // Ensure the response body is closed
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return body, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, body)
+	}
+
 	return body, nil
 }
 
 func planka_upload_file(filepath string, url string, filename string) ([]byte, error) {
-	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
-	if !exists {
-		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
+	plankaUrl, err := getEnv("PLANKA_URL")
+	if err != nil {
+		return nil, err
 	}
-	plankaToken, exists := os.LookupEnv("PLANKA_TOKEN")
-	if !exists {
-		return nil, fmt.Errorf("PLANKA_TOKEN environment variable is not set")
+	plankaToken, err := getEnv("PLANKA_TOKEN")
+	if err != nil {
+		return nil, err
 	}
 	file, err := os.Open(filepath)
 	if err != nil {
@@ -195,7 +225,7 @@ func planka_upload_file(filepath string, url string, filename string) ([]byte, e
 	return body, nil
 }
 
-func planka_api_call_for_user(json_data []byte, url string, call_type string, token string) ([]byte, error) {
+func plankaAPICall_for_user(json_data []byte, url string, call_type string, token string) ([]byte, error) {
 	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
 	if !exists {
 		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
@@ -240,7 +270,7 @@ func planka_delete_users() error {
 			if err != nil {
 				return fmt.Errorf("error fetching Planka user ID for email %s: %w", email, err)
 			}
-			_, err = planka_api_call(nil, "/api/users/"+id, "DELETE")
+			_, err = plankaAPICall(nil, "/api/users/"+id, "DELETE")
 			if err != nil {
 				return fmt.Errorf("error deleting Planka user with email %s: %w", email, err)
 			}
@@ -264,13 +294,13 @@ func delete_planka_projects() error {
 			return fmt.Errorf("error fetching boards for project %s: %w", project.Name, err)
 		}
 		for _, boardID := range boards {
-			_, err = planka_api_call(nil, "/api/boards/"+boardID, "DELETE")
+			_, err = plankaAPICall(nil, "/api/boards/"+boardID, "DELETE")
 			if err != nil {
 				return fmt.Errorf("error deleting board %s in project %s: %w", boardID, project.Name, err)
 			}
 			fmt.Printf("Deleted board %s in project %s\n", boardID, project.Name)
 		}
-		_, err = planka_api_call(nil, "/api/projects/"+project.ID, "DELETE")
+		_, err = plankaAPICall(nil, "/api/projects/"+project.ID, "DELETE")
 		if err != nil {
 			return err
 		}
@@ -280,7 +310,7 @@ func delete_planka_projects() error {
 
 func get_planka_users_emails() ([]string, error) {
 	var emails []string
-	body, err := planka_api_call(nil, "/api/users", "GET")
+	body, err := plankaAPICall(nil, "/api/users", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -300,7 +330,7 @@ func get_planka_users_emails() ([]string, error) {
 }
 
 func get_planka_userId_by_email(email string) (string, error) {
-	body, err := planka_api_call(nil, "/api/users", "GET")
+	body, err := plankaAPICall(nil, "/api/users", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return "", err
@@ -326,7 +356,7 @@ func create_planka_user(user PlankaUser) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling user data: %w", err)
 	}
-	body, err := planka_api_call(userJson, "/api/users", "POST")
+	body, err := plankaAPICall(userJson, "/api/users", "POST")
 
 	if body == nil && err != nil {
 		return fmt.Errorf("failed to create user")
@@ -336,7 +366,7 @@ func create_planka_user(user PlankaUser) error {
 }
 
 func get_planka_boards_for_project(projectId string) ([]string, error) {
-	body, err := planka_api_call(nil, "/api/projects/"+projectId, "GET")
+	body, err := plankaAPICall(nil, "/api/projects/"+projectId, "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -354,7 +384,7 @@ func get_planka_boards_for_project(projectId string) ([]string, error) {
 }
 
 func get_planka_projects() (map[string]CreatedProject, error) {
-	body, err := planka_api_call(nil, "/api/projects", "GET")
+	body, err := plankaAPICall(nil, "/api/projects", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -414,7 +444,7 @@ func create_planka_project(space KaitenSpace) (CreatedProject, error) {
 			KaitenSpaceUID: space.UID,
 		}, nil
 	} else {
-		body, err := planka_api_call(projectJson, "/api/projects", "POST")
+		body, err := plankaAPICall(projectJson, "/api/projects", "POST")
 		if body == nil && err != nil {
 			return CreatedProject{}, fmt.Errorf("failed to create project")
 		}
@@ -450,7 +480,7 @@ func create_planka_board(projectId string, board KaitenBoard, prefix string) (Cr
 	if err != nil {
 		return CreatedPlankaBoard{}, fmt.Errorf("error marshalling project data: %w", err)
 	}
-	body, err := planka_api_call(boardJson, "/api/projects/"+projectId+"/boards", "POST")
+	body, err := plankaAPICall(boardJson, "/api/projects/"+projectId+"/boards", "POST")
 	if body == nil && err != nil {
 		return CreatedPlankaBoard{}, fmt.Errorf("failed to create user")
 	}
@@ -480,7 +510,7 @@ func set_planka_board_member(boardId string, member string) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling list data: %w", err)
 	}
-	body, err := planka_api_call(memberJson, "/api/boards/"+boardId+"/board-memberships", "POST")
+	body, err := plankaAPICall(memberJson, "/api/boards/"+boardId+"/board-memberships", "POST")
 	if body == nil && err != nil {
 		return fmt.Errorf("failed to create list")
 	}
@@ -494,7 +524,7 @@ func create_planka_list(boardId string, column KaitenColumn) (CreatedList, error
 		return CreatedList{}, fmt.Errorf("error marshalling list data: %w", err)
 	}
 
-	body, err := planka_api_call(listJson, "/api/boards/"+boardId+"/lists", "POST")
+	body, err := plankaAPICall(listJson, "/api/boards/"+boardId+"/lists", "POST")
 	if body == nil && err != nil {
 		return CreatedList{}, fmt.Errorf("failed to create list")
 	}
@@ -518,7 +548,7 @@ func set_planka_card_member(cardId string, member string) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling list data: %w", err)
 	}
-	body, err := planka_api_call(memberJson, "/api/cards/"+cardId+"/card-memberships", "POST")
+	body, err := plankaAPICall(memberJson, "/api/cards/"+cardId+"/card-memberships", "POST")
 	if body == nil && err != nil {
 		return fmt.Errorf("failed to create list")
 	}
@@ -546,7 +576,7 @@ func create_planka_card(listId string, card KaitenCard) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error marshalling card data: %w", err)
 	}
-	body, err := planka_api_call(cardJson, "/api/lists/"+listId+"/cards", "POST")
+	body, err := plankaAPICall(cardJson, "/api/lists/"+listId+"/cards", "POST")
 	if body == nil && err != nil {
 		return "", fmt.Errorf("failed to create card")
 	}
@@ -579,7 +609,7 @@ func get_planka_access_token(email string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error marshalling user data: %w", err)
 	}
-	body, err := planka_api_call(userJson, "/api/access-tokens", "POST")
+	body, err := plankaAPICall(userJson, "/api/access-tokens", "POST")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return "", err
@@ -621,7 +651,7 @@ func create_planka_card_comment(cardId string, comment KaitenComment) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling comment data: %w", err)
 	}
-	body, err := planka_api_call_for_user(commentJson, "/api/cards/"+cardId+"/comments", "POST", token)
+	body, err := plankaAPICall_for_user(commentJson, "/api/cards/"+cardId+"/comments", "POST", token)
 	if body == nil && err != nil {
 		return fmt.Errorf("failed to create comment")
 	}
@@ -681,7 +711,7 @@ func create_planka_card_tasklist(card_id string, checklist KaitenChecklist) (str
 		fmt.Printf("Error marshalling task list to json")
 		return "", err
 	}
-	body, err := planka_api_call(json_payload, "/api/cards/"+card_id+"/task-lists", "POST")
+	body, err := plankaAPICall(json_payload, "/api/cards/"+card_id+"/task-lists", "POST")
 	if err != nil {
 		fmt.Printf("Error sending request to create tasklist")
 		return "", err
@@ -703,7 +733,7 @@ func create_planka_task_in_tasklist(list_id string, item KaitenChecklistItem) (s
 		fmt.Printf("Error marshalling task list to json")
 		return "", err
 	}
-	body, err := planka_api_call(json_payload, "/api/task-lists/"+list_id+"/tasks", "POST")
+	body, err := plankaAPICall(json_payload, "/api/task-lists/"+list_id+"/tasks", "POST")
 	if err != nil {
 		fmt.Printf("Error sending request to create task")
 		return "", err
@@ -725,7 +755,7 @@ func create_planka_label_for_board(boardId string, tag KaitenTag) (PlankaLabel, 
 		fmt.Printf("Error marshalling task list to json")
 		return PlankaLabel{}, err
 	}
-	body, err := planka_api_call(json_payload, "/api/boards/"+boardId+"/labels", "POST")
+	body, err := plankaAPICall(json_payload, "/api/boards/"+boardId+"/labels", "POST")
 	if err != nil {
 		fmt.Printf("Error sending request to create task")
 		return PlankaLabel{}, err
@@ -746,7 +776,7 @@ func create_planka_label_for_card(card_id string, label_id string) error {
 		fmt.Printf("Error marshalling task list to json")
 		return err
 	}
-	body, err := planka_api_call(json_payload, "/api/cards/"+card_id+"/card-labels", "POST")
+	body, err := plankaAPICall(json_payload, "/api/cards/"+card_id+"/card-labels", "POST")
 	if err != nil {
 		fmt.Printf("Error sending request to create task")
 		return err
