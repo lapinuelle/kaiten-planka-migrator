@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 )
@@ -72,69 +71,86 @@ type KaitenTag struct {
 	Color float64 `json:"color"`
 }
 
-func kaiten_api_call(url string, method string) ([]byte, error) {
+func kaitenAPICall(url string, method string) ([]byte, error) {
 	time.Sleep(time.Millisecond * 300)
-	kaitenUrl, exists := os.LookupEnv("KAITEN_URL")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_URL environment variable is not set")
+
+	kaitenUrl, err := getEnv("KAITEN_URL")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get KAITEN_URL: %w", err)
 	}
-	kaitenToken, exists := os.LookupEnv("KAITEN_TOKEN")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_TOKEN environment variable is not set")
+
+	kaitenToken, err := getEnv("KAITEN_TOKEN")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get KAITEN_TOKEN: %w", err)
 	}
+
 	req, err := http.NewRequest(method, kaitenUrl+url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Add("Accept", "application/json")
-	req.Header.Add("Authorization", "Bearer "+kaitenToken)
-	req.Header.Add("Content-Type", "application/json")
-	client := &http.Client{}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+kaitenToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close() // Ensure the response body is closed
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, body)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	return body, err
+	return body, nil
 }
 
-func get_kaiten_users() (interface{}, error) {
-	return kaiten_api_call("/api/latest/users", "GET")
+func getKaitenUsers() (interface{}, error) {
+	return kaitenAPICall("/api/latest/users", "GET")
 }
 
-func get_kaiten_tags() (map[float64]KaitenTag, error) {
-	body, err := kaiten_api_call("/api/latest/tags", "GET")
+func getKaitenTags() (map[float64]KaitenTag, error) {
+	body, err := kaitenAPICall("/api/latest/tags", "GET")
 	if err != nil {
-		fmt.Println("Error getting tags from Kaiten")
-		return nil, err
+		return nil, fmt.Errorf("failed to get tags from Kaiten: %w", err)
 	}
-	var body_json []interface{}
-	if err := json.Unmarshal(body, &body_json); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+
+	type Tag struct {
+		ID    float64 `json:"id"`
+		Name  string  `json:"name"`
+		Color float64 `json:"color"`
 	}
-	tags := make(map[float64]KaitenTag)
-	for _, tag := range body_json {
-		tags[tag.(map[string]interface{})["id"].(float64)] = KaitenTag{
-			Name:  tag.(map[string]interface{})["name"].(string),
-			Id:    tag.(map[string]interface{})["id"].(float64),
-			Color: tag.(map[string]interface{})["color"].(float64),
+
+	var tags []Tag
+	if err := json.Unmarshal(body, &tags); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
+	result := make(map[float64]KaitenTag)
+	for _, tag := range tags {
+		result[tag.ID] = KaitenTag{
+			Name:  tag.Name,
+			Id:    tag.ID,
+			Color: tag.Color,
 		}
 	}
-	return tags, nil
+
+	return result, nil
 }
 
 func get_kaiten_spaces() (map[string]KaitenSpace, error) {
-	body, err := kaiten_api_call("/api/latest/spaces", "GET")
+	body, err := kaitenAPICall("/api/latest/spaces", "GET")
 
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
@@ -182,7 +198,7 @@ func get_kaiten_spaces() (map[string]KaitenSpace, error) {
 }
 
 func get_kaiten_boards_for_space(Space KaitenSpace) ([]KaitenBoard, error) {
-	body, err := kaiten_api_call("/api/latest/spaces/"+strconv.FormatFloat(Space.ID, 'f', -1, 64)+"/boards", "GET")
+	body, err := kaitenAPICall("/api/latest/spaces/"+strconv.FormatFloat(Space.ID, 'f', -1, 64)+"/boards", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -205,7 +221,7 @@ func get_kaiten_boards_for_space(Space KaitenSpace) ([]KaitenBoard, error) {
 }
 
 func get_kaiten_columns_for_board(boardId float64) ([]KaitenColumn, error) {
-	body, err := kaiten_api_call("/api/latest/boards/"+strconv.FormatFloat(boardId, 'f', -1, 64)+"/columns", "GET")
+	body, err := kaitenAPICall("/api/latest/boards/"+strconv.FormatFloat(boardId, 'f', -1, 64)+"/columns", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -229,7 +245,7 @@ func get_kaiten_columns_for_board(boardId float64) ([]KaitenColumn, error) {
 }
 
 func get_kaiten_cards_for_column(columnId float64) ([]KaitenCard, error) {
-	body, err := kaiten_api_call("/api/latest/cards?column_ids="+strconv.FormatFloat(columnId, 'f', -1, 64), "GET")
+	body, err := kaitenAPICall("/api/latest/cards?column_ids="+strconv.FormatFloat(columnId, 'f', -1, 64), "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -254,7 +270,7 @@ func get_kaiten_cards_for_column(columnId float64) ([]KaitenCard, error) {
 }
 
 func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
-	body, err := kaiten_api_call("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64), "GET")
+	body, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64), "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return KaitenCard{}, err
@@ -333,7 +349,7 @@ func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
 }
 
 func get_kaiten_comments_for_card(cardId float64) ([]KaitenComment, error) {
-	body, err := kaiten_api_call("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/comments", "GET")
+	body, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/comments", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -359,7 +375,7 @@ func get_kaiten_comments_for_card(cardId float64) ([]KaitenComment, error) {
 }
 
 func get_kaiten_attachments_for_card(cardId float64) ([]KaitenAttachment, error) {
-	attachments, err := kaiten_api_call("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/files", "GET")
+	attachments, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/files", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return nil, err
@@ -384,7 +400,7 @@ func get_kaiten_attachments_for_card(cardId float64) ([]KaitenAttachment, error)
 }
 
 func get_kaiten_checklist_for_card(card_id float64, checklist_id float64) (KaitenChecklist, error) {
-	data, err := kaiten_api_call("/api/latest/cards/"+strconv.FormatFloat(card_id, 'f', -1, 64)+"/checklists/"+strconv.FormatFloat(checklist_id, 'f', -1, 64), "GET")
+	data, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(card_id, 'f', -1, 64)+"/checklists/"+strconv.FormatFloat(checklist_id, 'f', -1, 64), "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
 		return KaitenChecklist{}, err

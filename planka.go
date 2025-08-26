@@ -108,14 +108,6 @@ type PlankaLabelForCard struct {
 	ID string `json:"labelId"`
 }
 
-func getEnv(name string) (string, error) {
-	val, exists := os.LookupEnv(name)
-	if !exists {
-		return "", fmt.Errorf("%s environment variable is not set", name)
-	}
-	return val, nil
-}
-
 func plankaAPICall(json_data []byte, endpoint string, method string) ([]byte, error) {
 
 	plankaUrl, err := getEnv("PLANKA_URL")
@@ -319,7 +311,7 @@ func plankaDeleteUser() error {
 }
 
 func deletePlankaProjects() error {
-	projects, err := get_planka_projects()
+	projects, err := getPlankaProjects()
 	if err != nil {
 		return fmt.Errorf("error fetching projects: %w", err)
 	}
@@ -432,40 +424,41 @@ func getPlankaBoardsForProject(projectId string) ([]string, error) {
 	return boards, nil
 }
 
-func get_planka_projects() (map[string]PlankaProject, error) {
+func getPlankaProjects() (map[string]PlankaProject, error) {
 	body, err := plankaAPICall(nil, "/api/projects", "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch projects: %w", err)
 	}
 
-	var projects map[string]interface{}
-	if err := json.Unmarshal(body, &projects); err != nil {
-		log.Fatalf("failed to parse JSON: %w", err)
+	type ProjectItem struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
 	}
+
+	type ProjectsResponse struct {
+		Items []ProjectItem `json:"items"`
+	}
+
+	var response ProjectsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
+	}
+
 	createdProjects := make(map[string]PlankaProject)
-	for _, project := range projects["items"].([]interface{}) {
-		if projectMap, ok := project.(map[string]interface{}); ok {
-
-			var projectDescription string
-			if projectMap["description"] == nil {
-				projectDescription = ""
-			} else {
-				projectDescription = projectMap["description"].(string)
-			}
-			createdProjects[projectMap["name"].(string)] = PlankaProject{
-				ID:             projectMap["id"].(string),
-				Description:    projectDescription,
-				Name:           projectMap["name"].(string),
-				KaitenSpaceID:  0,
-				KaitenSpaceUID: "",
-			}
+	for _, item := range response.Items {
+		createdProjects[item.Name] = PlankaProject{
+			ID:             item.ID,
+			Description:    item.Description,
+			Name:           item.Name,
+			KaitenSpaceID:  0,
+			KaitenSpaceUID: "",
 		}
 	}
 	return createdProjects, nil
 }
 
-func create_planka_project(space KaitenSpace) (PlankaProject, error) {
+func createPlankaProject(space KaitenSpace) (PlankaProject, error) {
 	project := PlankaProject{
 		Name:        space.Name,
 		Description: "Migrated from Kaiten",
@@ -477,7 +470,7 @@ func create_planka_project(space KaitenSpace) (PlankaProject, error) {
 		return PlankaProject{}, fmt.Errorf("error marshalling project data: %w", err)
 	}
 
-	availableProjects, err := get_planka_projects()
+	availableProjects, err := getPlankaProjects()
 	if err != nil {
 		return PlankaProject{}, fmt.Errorf("error fetching existing projects: %w", err)
 	}
@@ -519,7 +512,7 @@ func create_planka_project(space KaitenSpace) (PlankaProject, error) {
 	}
 }
 
-func create_planka_board(projectId string, board KaitenBoard, prefix string) (PlankaBoard, error) {
+func createPlankaBoard(projectId string, board KaitenBoard, prefix string) (PlankaBoard, error) {
 	boardToCreate := PlankaBoard{
 		Name:     prefix + board.Title,
 		Position: 0,
@@ -549,7 +542,7 @@ func create_planka_board(projectId string, board KaitenBoard, prefix string) (Pl
 
 }
 
-func set_planka_board_member(boardId string, member string) error {
+func setPlankaBoardMember(boardId string, member string) error {
 	var boardMember PlankaBoardMember
 	boardMember.UserId = member
 	boardMember.Role = "editor"
@@ -566,7 +559,7 @@ func set_planka_board_member(boardId string, member string) error {
 	return nil
 }
 
-func create_planka_list(boardId string, column KaitenColumn) (PlankaList, error) {
+func createPlankaList(boardId string, column KaitenColumn) (PlankaList, error) {
 
 	listJson, err := json.Marshal(column)
 	if err != nil {
@@ -589,7 +582,7 @@ func create_planka_list(boardId string, column KaitenColumn) (PlankaList, error)
 	return createdList, nil
 }
 
-func set_planka_card_member(cardId string, member string) error {
+func setPlankaCardNumber(cardId string, member string) error {
 	var boardMember PlankaCardMember
 	boardMember.UserId = member
 
@@ -604,7 +597,7 @@ func set_planka_card_member(cardId string, member string) error {
 	return nil
 }
 
-func create_planka_card(listId string, card KaitenCard) (string, error) {
+func createPlankaCard(listId string, card KaitenCard) (string, error) {
 	var plankaCard PlankaCard
 	plankaCard.Name = card.Title
 	plankaCard.Description = card.Description
@@ -637,7 +630,7 @@ func create_planka_card(listId string, card KaitenCard) (string, error) {
 	return bodyInterface.(map[string]interface{})["item"].(map[string]interface{})["id"].(string), nil
 }
 
-func get_planka_access_token(email string) (string, error) {
+func getPlankaAccessToken(email string) (string, error) {
 	admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
 	if !exists {
 		return "", fmt.Errorf("PLANKA_URL environment variable is not set")
@@ -674,15 +667,15 @@ func get_planka_access_token(email string) (string, error) {
 	}
 }
 
-func create_planka_card_comment(cardId string, comment KaitenComment) error {
-	token, err := get_planka_access_token(comment.AuthorEmail)
+func createPlankaCommentForCard(cardId string, comment KaitenComment) error {
+	token, err := getPlankaAccessToken(comment.AuthorEmail)
 	if err != nil {
 		fmt.Printf("error getting Planka access token for email %s: %w", comment.AuthorEmail, err)
 		admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
 		if !exists {
 			return fmt.Errorf("PLANKA_URL environment variable is not set")
 		}
-		token, err = get_planka_access_token(admin_email)
+		token, err = getPlankaAccessToken(admin_email)
 		if err != nil {
 			fmt.Errorf("error getting Planka access token for email %s: %w", comment.AuthorEmail, err)
 			return err
@@ -707,7 +700,7 @@ func create_planka_card_comment(cardId string, comment KaitenComment) error {
 	return nil
 }
 
-func create_planka_card_attachment(cardId string, attachment KaitenAttachment) (string, error) {
+func createPlankaAttachmentForCard(cardId string, attachment KaitenAttachment) (string, error) {
 	outputFileName := attachment.Name
 	// Create the output file
 	outputFile, err := os.Create(outputFileName)
@@ -751,7 +744,7 @@ func create_planka_card_attachment(cardId string, attachment KaitenAttachment) (
 	return "", nil
 }
 
-func create_planka_card_tasklist(card_id string, checklist KaitenChecklist) (string, error) {
+func createPlankaTasklistForCard(card_id string, checklist KaitenChecklist) (string, error) {
 	var tasklist PlankaTaskList
 	tasklist.Name = checklist.Name
 	tasklist.Position = 0
@@ -772,7 +765,7 @@ func create_planka_card_tasklist(card_id string, checklist KaitenChecklist) (str
 	return response_json["item"].(map[string]interface{})["id"].(string), nil
 }
 
-func create_planka_task_in_tasklist(list_id string, item KaitenChecklistItem) (string, error) {
+func createPlankaTaskInTasklist(list_id string, item KaitenChecklistItem) (string, error) {
 	var task PlankaTask
 	task.Name = item.Text
 	task.Position = 0
@@ -794,7 +787,7 @@ func create_planka_task_in_tasklist(list_id string, item KaitenChecklistItem) (s
 	return response_json["item"].(map[string]interface{})["id"].(string), nil
 }
 
-func create_planka_label_for_board(boardId string, tag KaitenTag) (PlankaLabel, error) {
+func createPlankaLabelForBoard(boardId string, tag KaitenTag) (PlankaLabel, error) {
 	var labelToCreate PlankaLabel
 	labelToCreate.Name = tag.Name
 	labelToCreate.Color = PlankaColors[int(tag.Color)]
@@ -817,7 +810,7 @@ func create_planka_label_for_board(boardId string, tag KaitenTag) (PlankaLabel, 
 	return labelToCreate, nil
 }
 
-func create_planka_label_for_card(card_id string, label_id string) error {
+func createPlankaLabelForCard(card_id string, label_id string) error {
 	var lbl PlankaLabelForCard
 	lbl.ID = label_id
 	json_payload, err := json.Marshal(lbl)

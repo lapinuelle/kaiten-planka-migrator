@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"slices"
 
 	"github.com/joho/godotenv"
@@ -14,6 +15,14 @@ func init() {
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
 	}
+}
+
+func getEnv(name string) (string, error) {
+	val, exists := os.LookupEnv(name)
+	if !exists {
+		return "", fmt.Errorf("%s environment variable is not set", name)
+	}
+	return val, nil
 }
 
 func main() {
@@ -27,12 +36,12 @@ func main() {
 		log.Fatalf("Error deleting Planka projects: %v", err)
 	}
 
-	rawUsers, err := get_kaiten_users()
+	rawUsers, err := getKaitenUsers()
 	if err != nil {
 		log.Fatalf("Error getting users from Kaiten: %v", err)
 	}
 
-	tags, err := get_kaiten_tags()
+	tags, err := getKaitenTags()
 	if err != nil {
 		log.Fatalf("Error getting tags from Kaiten: %v", err)
 	}
@@ -79,7 +88,7 @@ func main() {
 
 		if space.ParentID == "" {
 			// Creating projects for top-level spaces
-			plankaProject, err := create_planka_project(space)
+			plankaProject, err := createPlankaProject(space)
 			plankaProjects[plankaProject.KaitenSpaceUID] = plankaProject
 			if err != nil {
 				log.Printf("Error creating Planka project for space %s: %v", space.Name, err)
@@ -114,7 +123,7 @@ func main() {
 				kaiten_board.Title = space.Name
 			}
 			fmt.Printf("Board named %s created in project %s\n", boardTitlePrefix+kaiten_board.Title, plankaProjects[spaceUIDforBoardCreation].Name)
-			board, err := create_planka_board(plankaProjects[spaceUIDforBoardCreation].ID, kaiten_board, boardTitlePrefix)
+			board, err := createPlankaBoard(plankaProjects[spaceUIDforBoardCreation].ID, kaiten_board, boardTitlePrefix)
 			boardLabels := make(map[float64]PlankaLabel)
 			if err != nil {
 				log.Printf("Error creating Planka board for project %s: %v", plankaProjects[spaceUIDforBoardCreation].ID, err)
@@ -135,7 +144,7 @@ func main() {
 					log.Printf("Error getting Planka user ID for email %s: %v", email, err)
 					continue
 				}
-				err = set_planka_board_member(board.ID, userId)
+				err = setPlankaBoardMember(board.ID, userId)
 				if err != nil {
 					log.Printf("Error setting Planka board member for board %s and user %s: %v", board.ID, userId, err)
 					continue
@@ -146,7 +155,7 @@ func main() {
 				if board.Name == "Графика" {
 					fmt.Printf("GOTCHA!\n")
 				}
-				plankaColumn, err := create_planka_list(board.ID, column)
+				plankaColumn, err := createPlankaList(board.ID, column)
 				if err != nil {
 					log.Printf("Error creating Planka column for board %s: %v", board.ID, err)
 					continue
@@ -164,7 +173,7 @@ func main() {
 					if card.Archived == true {
 						continue
 					}
-					cardId, err := create_planka_card(plankaColumn.ID, card)
+					cardId, err := createPlankaCard(plankaColumn.ID, card)
 					if err != nil {
 						log.Fatalf("Can't create card")
 					}
@@ -177,7 +186,7 @@ func main() {
 								continue
 							}
 
-							err = set_planka_card_member(cardId, userId)
+							err = setPlankaCardNumber(cardId, userId)
 							if err != nil {
 								log.Printf("Error setting Planka card member for card %s and user %s: %v", cardId, userId, err)
 								continue
@@ -189,12 +198,12 @@ func main() {
 					if card.TagIds != nil {
 						for _, tagID := range card.TagIds {
 							if _, ok := boardLabels[tagID]; !ok {
-								label, err := create_planka_label_for_board(board.ID, tags[tagID])
+								label, err := createPlankaLabelForBoard(board.ID, tags[tagID])
 								if err == nil {
 									boardLabels[tagID] = label
 								}
 							}
-							err = create_planka_label_for_card(cardId, boardLabels[tagID].Id)
+							err = createPlankaLabelForCard(cardId, boardLabels[tagID].Id)
 							if err != nil {
 								log.Printf("Error setting Planka label for card %s: %v", cardId, err)
 								continue
@@ -209,12 +218,12 @@ func main() {
 							log.Printf("Error getting checklist for card %s: %v", cardId, err)
 							continue
 						}
-						list_id, err := create_planka_card_tasklist(cardId, kaiten_list)
+						list_id, err := createPlankaTasklistForCard(cardId, kaiten_list)
 						if err != nil {
 							fmt.Printf("Error creating tasklist")
 						}
 						for _, item := range kaiten_list.Items {
-							task_id, err := create_planka_task_in_tasklist(list_id, item)
+							task_id, err := createPlankaTaskInTasklist(list_id, item)
 							if err != nil {
 								fmt.Printf("Error creating task: %w\n", err)
 								continue
@@ -227,7 +236,7 @@ func main() {
 					comments, err := get_kaiten_comments_for_card(card.ID)
 					if err == nil && comments != nil {
 						for _, comment := range comments {
-							err := create_planka_card_comment(cardId, comment)
+							err := createPlankaCommentForCard(cardId, comment)
 							if err != nil {
 								log.Printf("Error creating Planka comment for card %s: %v", cardId, err)
 								continue
@@ -241,7 +250,7 @@ func main() {
 					if attachments != nil {
 						fmt.Printf("Got attachments for card %s: %v\n", cardId, attachments)
 						for _, attachment := range attachments {
-							_, err := create_planka_card_attachment(cardId, attachment)
+							_, err := createPlankaAttachmentForCard(cardId, attachment)
 							if err != nil {
 								log.Printf("Error creating Planka attachment for card %s: %v", cardId, err)
 								continue
