@@ -11,6 +11,27 @@ import (
 	"os"
 )
 
+var colors = []string{
+	"light-mud",
+	"piggy-red",
+	"pink-tulip",
+	"lavender-fields",
+	"sugar-plum",
+	"antique-blue",
+	"morning-sky",
+	"summer-sky",
+	"french-coast",
+	"turquoise-sea",
+	"tank-green",
+	"bright-moss",
+	"fresh-salad",
+	"desert-sand",
+	"apricot-red",
+	"dark-granite",
+	"light-concrete",
+	"light-mud",
+}
+
 type PlankaProject struct {
 	Name        string `json:"name"`
 	Description string `json:"desc"`
@@ -74,6 +95,17 @@ type PlankaTask struct {
 	Position    float64 `json:"position"`
 	Name        string  `json:"name"`
 	IsCompleted bool    `json:"isCompleted"`
+}
+
+type PlankaLabel struct {
+	Position float64 `json:"position"`
+	Name     string  `json:"name"`
+	Color    string  `json:"color"`
+	Id       string  `json:"id,omitempty"`
+}
+
+type PlankaLabelForCard struct {
+	ID string `json:"labelId"`
 }
 
 func planka_api_call(json_data []byte, url string, call_type string) ([]byte, error) {
@@ -499,6 +531,7 @@ func create_planka_card(listId string, card KaitenCard) (string, error) {
 	plankaCard.Description = card.Description
 	plankaCard.Position = card.SortOrder
 	plankaCard.Type = "project"
+
 	if card.DueDate != "" {
 		plankaCard.DueDate = card.DueDate
 	} else {
@@ -680,4 +713,44 @@ func create_planka_task_in_tasklist(list_id string, item KaitenChecklistItem) (s
 		log.Fatalf("failed to parse JSON: %w", err)
 	}
 	return response_json["item"].(map[string]interface{})["id"].(string), nil
+}
+
+func create_planka_label_for_board(boardId string, tag KaitenTag) (PlankaLabel, error) {
+	var labelToCreate PlankaLabel
+	labelToCreate.Name = tag.Name
+	labelToCreate.Color = colors[int(tag.Color)]
+	labelToCreate.Position = 0
+	json_payload, err := json.Marshal(labelToCreate)
+	if err != nil {
+		fmt.Printf("Error marshalling task list to json")
+		return PlankaLabel{}, err
+	}
+	body, err := planka_api_call(json_payload, "/api/boards/"+boardId+"/labels", "POST")
+	if err != nil {
+		fmt.Printf("Error sending request to create task")
+		return PlankaLabel{}, err
+	}
+	var response_json map[string]interface{}
+	if err := json.Unmarshal(body, &response_json); err != nil {
+		log.Fatalf("failed to parse JSON: %w", err)
+	}
+	labelToCreate.Id = response_json["item"].(map[string]interface{})["id"].(string)
+	return labelToCreate, nil
+}
+
+func create_planka_label_for_card(card_id string, label_id string) error {
+	var lbl PlankaLabelForCard
+	lbl.ID = label_id
+	json_payload, err := json.Marshal(lbl)
+	if err != nil {
+		fmt.Printf("Error marshalling task list to json")
+		return err
+	}
+	body, err := planka_api_call(json_payload, "/api/cards/"+card_id+"/card-labels", "POST")
+	if err != nil {
+		fmt.Printf("Error sending request to create task")
+		return err
+	}
+	log.Printf("%s\n", body)
+	return nil
 }

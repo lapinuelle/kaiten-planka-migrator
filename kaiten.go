@@ -32,14 +32,16 @@ type KaitenColumn struct {
 }
 
 type KaitenCard struct {
-	ID          float64  `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	SortOrder   float64  `json:"sort_order"`
-	Memders     []string `json:"members"`
-	DueDate     string   `json:"due_date,omitempty"`
-	StartDate   string   `json:"start_date,omitempty"`
-	EndDate     string   `json:"end_date,omitempty"`
+	ID          float64   `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	SortOrder   float64   `json:"sort_order"`
+	Memders     []string  `json:"members"`
+	DueDate     string    `json:"due_date,omitempty"`
+	StartDate   string    `json:"start_date,omitempty"`
+	EndDate     string    `json:"end_date,omitempty"`
+	TagIds      []float64 `json:"tag_ids,omitempty"`
+	Archived    bool      `json:"archived"`
 }
 
 type KaitenComment struct {
@@ -62,6 +64,12 @@ type KaitenChecklist struct {
 type KaitenChecklistItem struct {
 	Text    string `json:"name"`
 	Checked bool   `json:"checked"`
+}
+
+type KaitenTag struct {
+	Id    float64 `json:"id"`
+	Name  string  `json:"name"`
+	Color float64 `json:"color"`
 }
 
 func kaiten_api_call(url string, method string) ([]byte, error) {
@@ -101,6 +109,28 @@ func kaiten_api_call(url string, method string) ([]byte, error) {
 
 func get_kaiten_users() (interface{}, error) {
 	return kaiten_api_call("/api/latest/users", "GET")
+}
+
+func get_kaiten_tags() (map[float64]KaitenTag, error) {
+	body, err := kaiten_api_call("/api/latest/tags", "GET")
+	if err != nil {
+		fmt.Println("Error getting tags from Kaiten")
+		return nil, err
+	}
+	var body_json []interface{}
+	if err := json.Unmarshal(body, &body_json); err != nil {
+		fmt.Println("Error parsing JSON:", err)
+		return nil, err
+	}
+	tags := make(map[float64]KaitenTag)
+	for _, tag := range body_json {
+		tags[tag.(map[string]interface{})["id"].(float64)] = KaitenTag{
+			Name:  tag.(map[string]interface{})["name"].(string),
+			Id:    tag.(map[string]interface{})["id"].(float64),
+			Color: tag.(map[string]interface{})["color"].(float64),
+		}
+	}
+	return tags, nil
 }
 
 func get_kaiten_spaces() (map[string]KaitenSpace, error) {
@@ -287,6 +317,11 @@ func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
 	} else {
 		card.Description = json_card["description"].(string)
 	}
+	if json_card["archived"] != nil {
+		card.Archived = json_card["archived"].(bool)
+	} else {
+		card.Archived = false
+	}
 	if json_card["due_date"] != nil {
 		card.DueDate = json_card["due_date"].(string)
 		card.StartDate = ""
@@ -303,6 +338,13 @@ func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
 		} else {
 			card.EndDate = ""
 		}
+	}
+	var tagIds []float64
+	if json_card["tag_ids"] != nil {
+		for _, id := range json_card["tag_ids"].([]interface{}) {
+			tagIds = append(tagIds, id.(float64))
+		}
+		card.TagIds = tagIds
 	}
 	if json_card["sort_order"].(float64) < 1 {
 		card.SortOrder = 1

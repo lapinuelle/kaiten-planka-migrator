@@ -25,6 +25,7 @@ func init() {
 }
 
 func main() {
+
 	err := planka_delete_users()
 	if err != nil {
 		log.Fatalf("Error deleting Planka users: %v", err)
@@ -38,8 +39,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error reading checklists from file: %v", err)
 	}
-	fmt.Printf("%s\n", kaiten_checklists)
+
 	raw_users, err := get_kaiten_users()
+
+	tags, err := get_kaiten_tags()
+	if err != nil {
+		log.Fatalf("Error getting tags from Kaiten: %v", err)
+	}
+	for _, tag := range tags {
+		fmt.Printf("Tag named %s with color %d have id %d\n", tag.Name, tag.Color, tag.Id)
+	}
 
 	{
 		if err != nil {
@@ -116,12 +125,14 @@ func main() {
 			spaceIdforBoard = space.ParentID
 		}
 		spaceUIDforBoardCreation := spaces[spaceIdforBoard].UID
+
 		for _, kaiten_board := range boards {
 			if len(boards) < 2 {
 				kaiten_board.Title = space.Name
 			}
 			fmt.Printf("Board named %s created in project %s\n", boardTitlePrefix+kaiten_board.Title, plankaProjects[spaceUIDforBoardCreation].Name)
 			board, err := create_planka_board(plankaProjects[spaceUIDforBoardCreation].ID, kaiten_board, boardTitlePrefix)
+			boardLabels := make(map[float64]PlankaLabel)
 			if err != nil {
 				log.Printf("Error creating Planka board for project %s: %v", plankaProjects[spaceUIDforBoardCreation].ID, err)
 				continue
@@ -163,9 +174,17 @@ func main() {
 					log.Printf("Error getting cards for column %s: %v", column.Id, err)
 					continue
 				}
+				if column.Name == "Готово" && board.Name == "X-CAD" {
+					fmt.Printf("GOTCHAAAAA!")
+				}
 				for _, card := range cards {
-
+					if card.Archived == true {
+						continue
+					}
 					cardId, err := create_planka_card(plankaColumn.ID, card)
+					if err != nil {
+						log.Fatalf("Can't create card")
+					}
 					if card.Memders != nil {
 
 						for _, member := range card.Memders {
@@ -183,6 +202,22 @@ func main() {
 
 						}
 
+					}
+					if card.TagIds != nil {
+						for _, tagID := range card.TagIds {
+							if _, ok := boardLabels[tagID]; !ok {
+								label, err := create_planka_label_for_board(board.ID, tags[tagID])
+								if err == nil {
+									boardLabels[tagID] = label
+								}
+							}
+							err = create_planka_label_for_card(cardId, boardLabels[tagID].Id)
+							if err != nil {
+								log.Printf("Error setting Planka label for card %s: %v", cardId, err)
+								continue
+							}
+
+						}
 					}
 					if _, ok := kaiten_checklists[card.ID]; ok {
 						for _, chechlistId := range kaiten_checklists[card.ID] {
