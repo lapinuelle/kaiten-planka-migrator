@@ -22,7 +22,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error deleting Planka users: %v", err)
 	}
-	err = delete_planka_projects()
+	err = deletePlankaProjects()
 	if err != nil {
 		log.Fatalf("Error deleting Planka projects: %v", err)
 	}
@@ -62,7 +62,7 @@ func main() {
 				Password: "1234tempPass",
 				Role:     "projectOwner",
 			}
-			err := create_planka_user(userData)
+			err := createPlankaUser(userData)
 			if err != nil {
 				log.Printf("Error creating Planka user %s: %v", userData.Username, err)
 				continue
@@ -134,7 +134,7 @@ func main() {
 				log.Fatalf("Error fetching Planka user emails: %v", err)
 			}
 			for _, email := range emails {
-				userId, err := get_planka_userId_by_email(email)
+				userId, err := getPlankaUserIDByEmail(email)
 				if err != nil {
 					log.Printf("Error getting Planka user ID for email %s: %v", email, err)
 					continue
@@ -175,7 +175,7 @@ func main() {
 					if card.Memders != nil {
 
 						for _, member := range card.Memders {
-							userId, err := get_planka_userId_by_email(member)
+							userId, err := getPlankaUserIDByEmail(member)
 							if err != nil {
 								log.Printf("Error getting Planka user ID for email %s: %v", member, err)
 								continue
