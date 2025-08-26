@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"time"
 )
 
 var colors = []string{
@@ -32,10 +33,22 @@ var colors = []string{
 	"light-mud",
 }
 
+type PlankaUser struct {
+	Username string `json:"username"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
 type PlankaProject struct {
-	Name        string `json:"name"`
-	Description string `json:"desc"`
-	Type        string `json:"type"`
+	Name           string   `json:"name"`
+	Description    string   `json:"desc"`
+	Type           string   `json:"type"`
+	ID             string   `json:"id,omitempty"`
+	KaitenSpaceID  float64  `json:"kaiten_space_id"`
+	KaitenSpaceUID string   `json:"kaiten_space_uid"`
+	Boards         []string `json:"boards,omitempty"`
 }
 
 type PlankaCardMember struct {
@@ -45,23 +58,10 @@ type PlankaCardMember struct {
 type PlankaBoard struct {
 	Position float64 `json:"position"`
 	Name     string  `json:"name"`
+	ID       string  `json:"id,omitempty"`
 }
 
-type CreatedPlankaBoard struct {
-	Name string `json:"name"`
-	ID   string `json:"id"`
-}
-
-type CreatedProject struct {
-	ID             string   `json:"id"`
-	Description    string   `json:"desc"`
-	Name           string   `json:"name"`
-	KaitenSpaceID  float64  `json:"kaiten_space_id"`
-	KaitenSpaceUID string   `json:"kaiten_space_uid"`
-	Boards         []string `json:"boards,omitempty"`
-}
-
-type CreatedList struct {
+type PlankaList struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
@@ -171,7 +171,7 @@ func plankaAPICall(json_data []byte, endpoint string, method string) ([]byte, er
 	return body, nil
 }
 
-func planka_upload_file(filepath string, url string, filename string) ([]byte, error) {
+func plankaUploadFile(filepath string, url string, filename string) ([]byte, error) {
 	plankaUrl, err := getEnv("PLANKA_URL")
 	if err != nil {
 		return nil, err
@@ -225,59 +225,80 @@ func planka_upload_file(filepath string, url string, filename string) ([]byte, e
 	return body, nil
 }
 
-func plankaAPICall_for_user(json_data []byte, url string, call_type string, token string) ([]byte, error) {
+func plankaAPICallByUser(jsonPayload []byte, url string, method string, token string) ([]byte, error) {
 	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
 	if !exists {
 		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
 	}
-	plankaToken := token
 
-	req, err := http.NewRequest(call_type, plankaUrl+url, bytes.NewBuffer(json_data))
+	req, err := http.NewRequest(method, plankaUrl+url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Authorization", "Bearer "+plankaToken)
-	client := &http.Client{}
+	req.Header.Add("Authorization", "Bearer "+token)
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	//defer resp.Body.Close() // Ensure the response body is closed
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, body)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+
 	return body, nil
 }
 
-func planka_delete_users() error {
+func plankaDeleteUser() error {
 	emails, err := get_planka_users_emails()
 	if err != nil {
 		return fmt.Errorf("error fetching Planka user emails: %w", err)
 	}
-	admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
+
+	adminEmail, exists := os.LookupEnv("ADMIN_EMAIL")
 	if !exists {
 		return fmt.Errorf("ADMIN_EMAIL environment variable is not set")
 	}
+
+	var validEmails []string
 	for _, email := range emails {
-		if email != "" && email != admin_email {
-			id, err := get_planka_userId_by_email(email)
-			if err != nil {
-				return fmt.Errorf("error fetching Planka user ID for email %s: %w", email, err)
-			}
-			_, err = plankaAPICall(nil, "/api/users/"+id, "DELETE")
-			if err != nil {
-				return fmt.Errorf("error deleting Planka user with email %s: %w", email, err)
-			}
-			fmt.Printf("Deleted user with email %s\n", email)
+		if email != "" {
+			validEmails = append(validEmails, email)
 		} else {
-			log.Printf("Skipping user with empty email")
+			log.Println("Skipping empty email")
 		}
+	}
+
+	for _, email := range validEmails {
+		if email == adminEmail {
+			log.Printf("Skipping admin user with email %s\n", email)
+			continue
+		}
+
+		userID, err := get_planka_userId_by_email(email)
+		if err != nil {
+			return fmt.Errorf("error fetching Planka user ID for email %s: %w", email, err)
+		}
+
+		respBody, err := plankaAPICall(nil, "/api/users/"+userID, "DELETE")
+		if err != nil {
+			return fmt.Errorf("error deleting Planka user with email %s: %w", email, err)
+		}
+
+		log.Printf("Deleted user with email %s (Response: %s)\n", email, string(respBody))
 	}
 	return nil
 }
@@ -383,7 +404,7 @@ func get_planka_boards_for_project(projectId string) ([]string, error) {
 	return boards, nil
 }
 
-func get_planka_projects() (map[string]CreatedProject, error) {
+func get_planka_projects() (map[string]PlankaProject, error) {
 	body, err := plankaAPICall(nil, "/api/projects", "GET")
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
@@ -394,7 +415,7 @@ func get_planka_projects() (map[string]CreatedProject, error) {
 	if err := json.Unmarshal(body, &projects); err != nil {
 		log.Fatalf("failed to parse JSON: %w", err)
 	}
-	createdProjects := make(map[string]CreatedProject)
+	createdProjects := make(map[string]PlankaProject)
 	for _, project := range projects["items"].([]interface{}) {
 		if projectMap, ok := project.(map[string]interface{}); ok {
 
@@ -404,7 +425,7 @@ func get_planka_projects() (map[string]CreatedProject, error) {
 			} else {
 				projectDescription = projectMap["description"].(string)
 			}
-			createdProjects[projectMap["name"].(string)] = CreatedProject{
+			createdProjects[projectMap["name"].(string)] = PlankaProject{
 				ID:             projectMap["id"].(string),
 				Description:    projectDescription,
 				Name:           projectMap["name"].(string),
@@ -416,7 +437,7 @@ func get_planka_projects() (map[string]CreatedProject, error) {
 	return createdProjects, nil
 }
 
-func create_planka_project(space KaitenSpace) (CreatedProject, error) {
+func create_planka_project(space KaitenSpace) (PlankaProject, error) {
 	project := PlankaProject{
 		Name:        space.Name,
 		Description: "Migrated from Kaiten",
@@ -425,18 +446,18 @@ func create_planka_project(space KaitenSpace) (CreatedProject, error) {
 
 	projectJson, err := json.Marshal(project)
 	if err != nil {
-		return CreatedProject{}, fmt.Errorf("error marshalling project data: %w", err)
+		return PlankaProject{}, fmt.Errorf("error marshalling project data: %w", err)
 	}
 
 	availableProjects, err := get_planka_projects()
 	if err != nil {
-		return CreatedProject{}, fmt.Errorf("error fetching existing projects: %w", err)
+		return PlankaProject{}, fmt.Errorf("error fetching existing projects: %w", err)
 	}
 	existingProject, exists := availableProjects[project.Name]
 	if exists {
 
 		fmt.Printf("Project %s already exists with ID: %s\n", existingProject.Name, existingProject.ID)
-		return CreatedProject{
+		return PlankaProject{
 			ID:             existingProject.ID,
 			Description:    existingProject.Description,
 			Name:           existingProject.Name,
@@ -446,15 +467,15 @@ func create_planka_project(space KaitenSpace) (CreatedProject, error) {
 	} else {
 		body, err := plankaAPICall(projectJson, "/api/projects", "POST")
 		if body == nil && err != nil {
-			return CreatedProject{}, fmt.Errorf("failed to create project")
+			return PlankaProject{}, fmt.Errorf("failed to create project")
 		}
 
-		var createdProject CreatedProject
+		var createdProject PlankaProject
 		var unmBody interface{}
 
 		if err != nil {
 			fmt.Println("Error reading response body:", err)
-			return CreatedProject{}, err
+			return PlankaProject{}, err
 		}
 
 		if err := json.Unmarshal(body, &unmBody); err != nil {
@@ -470,7 +491,7 @@ func create_planka_project(space KaitenSpace) (CreatedProject, error) {
 	}
 }
 
-func create_planka_board(projectId string, board KaitenBoard, prefix string) (CreatedPlankaBoard, error) {
+func create_planka_board(projectId string, board KaitenBoard, prefix string) (PlankaBoard, error) {
 	boardToCreate := PlankaBoard{
 		Name:     prefix + board.Title,
 		Position: 0,
@@ -478,22 +499,22 @@ func create_planka_board(projectId string, board KaitenBoard, prefix string) (Cr
 
 	boardJson, err := json.Marshal(boardToCreate)
 	if err != nil {
-		return CreatedPlankaBoard{}, fmt.Errorf("error marshalling project data: %w", err)
+		return PlankaBoard{}, fmt.Errorf("error marshalling project data: %w", err)
 	}
 	body, err := plankaAPICall(boardJson, "/api/projects/"+projectId+"/boards", "POST")
 	if body == nil && err != nil {
-		return CreatedPlankaBoard{}, fmt.Errorf("failed to create user")
+		return PlankaBoard{}, fmt.Errorf("failed to create user")
 	}
 	var createdBoardItem interface{}
 	if err != nil {
 		fmt.Println("Error reading response body:", err)
-		return CreatedPlankaBoard{}, err
+		return PlankaBoard{}, err
 	}
 	err = json.Unmarshal(body, &createdBoardItem)
 	if err != nil {
-		return CreatedPlankaBoard{}, fmt.Errorf("error unmarshalling response body: %w", err)
+		return PlankaBoard{}, fmt.Errorf("error unmarshalling response body: %w", err)
 	}
-	var createdBoard CreatedPlankaBoard
+	var createdBoard PlankaBoard
 	createdBoard.ID = createdBoardItem.(map[string]interface{})["item"].(map[string]interface{})["id"].(string)
 	createdBoard.Name = createdBoardItem.(map[string]interface{})["item"].(map[string]interface{})["name"].(string)
 	return createdBoard, nil
@@ -517,23 +538,23 @@ func set_planka_board_member(boardId string, member string) error {
 	return nil
 }
 
-func create_planka_list(boardId string, column KaitenColumn) (CreatedList, error) {
+func create_planka_list(boardId string, column KaitenColumn) (PlankaList, error) {
 
 	listJson, err := json.Marshal(column)
 	if err != nil {
-		return CreatedList{}, fmt.Errorf("error marshalling list data: %w", err)
+		return PlankaList{}, fmt.Errorf("error marshalling list data: %w", err)
 	}
 
 	body, err := plankaAPICall(listJson, "/api/boards/"+boardId+"/lists", "POST")
 	if body == nil && err != nil {
-		return CreatedList{}, fmt.Errorf("failed to create list")
+		return PlankaList{}, fmt.Errorf("failed to create list")
 	}
 	var createdListItem interface{}
 	err = json.Unmarshal(body, &createdListItem)
 	if err != nil {
-		return CreatedList{}, fmt.Errorf("error unmarshalling response body: %w", err)
+		return PlankaList{}, fmt.Errorf("error unmarshalling response body: %w", err)
 	}
-	var createdList CreatedList = CreatedList{
+	var createdList PlankaList = PlankaList{
 		ID:   createdListItem.(map[string]interface{})["item"].(map[string]interface{})["id"].(string),
 		Name: createdListItem.(map[string]interface{})["item"].(map[string]interface{})["name"].(string),
 	}
@@ -651,7 +672,7 @@ func create_planka_card_comment(cardId string, comment KaitenComment) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling comment data: %w", err)
 	}
-	body, err := plankaAPICall_for_user(commentJson, "/api/cards/"+cardId+"/comments", "POST", token)
+	body, err := plankaAPICallByUser(commentJson, "/api/cards/"+cardId+"/comments", "POST", token)
 	if body == nil && err != nil {
 		return fmt.Errorf("failed to create comment")
 	}
@@ -687,7 +708,7 @@ func create_planka_card_attachment(cardId string, attachment KaitenAttachment) (
 		fmt.Printf("Error copying data to file: %v\n", err)
 		return "", err
 	}
-	body, err := planka_upload_file(outputFileName, "/api/cards/"+cardId+"/attachments", attachment.Name)
+	body, err := plankaUploadFile(outputFileName, "/api/cards/"+cardId+"/attachments", attachment.Name)
 	if body == nil && err != nil {
 		return "", fmt.Errorf("failed to upload attachment")
 	}

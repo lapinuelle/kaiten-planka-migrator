@@ -9,14 +9,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type PlankaUser struct {
-	Username string `json:"username"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Role     string `json:"role"`
-}
-
 func init() {
 	// loads values from .env into the system
 	if err := godotenv.Load(); err != nil {
@@ -26,69 +18,64 @@ func init() {
 
 func main() {
 
-	err := planka_delete_users()
+	err := plankaDeleteUser()
 	if err != nil {
 		log.Fatalf("Error deleting Planka users: %v", err)
 	}
-	errr := delete_planka_projects()
-	if errr != nil {
-		log.Fatalf("Error deleting Planka projects: %v", errr)
+	err = delete_planka_projects()
+	if err != nil {
+		log.Fatalf("Error deleting Planka projects: %v", err)
 	}
-	// os.Exit(0)
-	kaiten_checklists, err := read_checklists_from_file()
+	kaitenChecklists, err := read_checklists_from_file()
 	if err != nil {
 		log.Fatalf("Error reading checklists from file: %v", err)
 	}
 
-	raw_users, err := get_kaiten_users()
+	rawUsers, err := get_kaiten_users()
+	if err != nil {
+		log.Fatalf("Error getting users from Kaiten: %v", err)
+	}
 
 	tags, err := get_kaiten_tags()
 	if err != nil {
 		log.Fatalf("Error getting tags from Kaiten: %v", err)
 	}
-	for _, tag := range tags {
-		fmt.Printf("Tag named %s with color %d have id %d\n", tag.Name, tag.Color, tag.Id)
+
+	var users interface{}
+	if err := json.Unmarshal(rawUsers.([]byte), &users); err != nil {
+		log.Fatalf("failed to parse JSON: %s", err)
+	}
+	emails, err := get_planka_users_emails()
+	if err != nil {
+		log.Fatalf("Error fetching Planka user emails: %v", err)
+	}
+	for _, user := range users.([]interface{}) {
+		if !slices.Contains(emails, user.(map[string]interface{})["email"].(string)) {
+			name := user.(map[string]interface{})["full_name"].(string)
+			if name == "" {
+				name = user.(map[string]interface{})["username"].(string)
+			}
+			userData := PlankaUser{
+				Username: user.(map[string]interface{})["username"].(string),
+				Name:     name,
+				Email:    user.(map[string]interface{})["email"].(string),
+				Password: "1234tempPass",
+				Role:     "projectOwner",
+			}
+			err := create_planka_user(userData)
+			if err != nil {
+				log.Printf("Error creating Planka user %s: %v", userData.Username, err)
+				continue
+			}
+			fmt.Printf("Created Planka user: %s\n", userData.Username)
+		}
 	}
 
-	{
-		if err != nil {
-			log.Fatalf("Error fetching Kaiten users: %v", err)
-		}
-		var users interface{}
-		if err := json.Unmarshal(raw_users.([]byte), &users); err != nil {
-			log.Fatalf("failed to parse JSON: %s", err)
-		}
-		emails, err := get_planka_users_emails()
-		if err != nil {
-			log.Fatalf("Error fetching Planka user emails: %v", err)
-		}
-		for _, user := range users.([]interface{}) {
-			if !slices.Contains(emails, user.(map[string]interface{})["email"].(string)) {
-				name := user.(map[string]interface{})["full_name"].(string)
-				if name == "" {
-					name = user.(map[string]interface{})["username"].(string)
-				}
-				userData := PlankaUser{
-					Username: user.(map[string]interface{})["username"].(string),
-					Name:     name,
-					Email:    user.(map[string]interface{})["email"].(string),
-					Password: "1234tempPass",
-					Role:     "projectOwner",
-				}
-				err := create_planka_user(userData)
-				if err != nil {
-					log.Printf("Error creating Planka user %s: %v", userData.Username, err)
-					continue
-				}
-				fmt.Printf("Created Planka user: %s\n", userData.Username)
-			}
-		}
-	}
 	spaces, err := get_kaiten_spaces()
 	if err != nil {
 		log.Fatalf("Error fetching Kaiten spaces: %v", err)
 	}
-	plankaProjects := make(map[string]CreatedProject)
+	plankaProjects := make(map[string]PlankaProject)
 	for _, space := range spaces {
 		if err != nil {
 			log.Fatalf("Error getting boards for space")
@@ -219,8 +206,8 @@ func main() {
 
 						}
 					}
-					if _, ok := kaiten_checklists[card.ID]; ok {
-						for _, chechlistId := range kaiten_checklists[card.ID] {
+					if _, ok := kaitenChecklists[card.ID]; ok {
+						for _, chechlistId := range kaitenChecklists[card.ID] {
 							kaiten_list, err := get_kaiten_checklist_for_card(card.ID, chechlistId)
 							if err != nil {
 								log.Printf("Error getting checklist for card %s: %v", cardId, err)
