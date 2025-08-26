@@ -26,10 +26,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error deleting Planka projects: %v", err)
 	}
-	kaitenChecklists, err := read_checklists_from_file()
-	if err != nil {
-		log.Fatalf("Error reading checklists from file: %v", err)
-	}
 
 	rawUsers, err := get_kaiten_users()
 	if err != nil {
@@ -206,28 +202,28 @@ func main() {
 
 						}
 					}
-					if _, ok := kaitenChecklists[card.ID]; ok {
-						for _, chechlistId := range kaitenChecklists[card.ID] {
-							kaiten_list, err := get_kaiten_checklist_for_card(card.ID, chechlistId)
+
+					for _, chechlistId := range card.Checklists {
+						kaiten_list, err := get_kaiten_checklist_for_card(card.ID, chechlistId)
+						if err != nil {
+							log.Printf("Error getting checklist for card %s: %v", cardId, err)
+							continue
+						}
+						list_id, err := create_planka_card_tasklist(cardId, kaiten_list)
+						if err != nil {
+							fmt.Printf("Error creating tasklist")
+						}
+						for _, item := range kaiten_list.Items {
+							task_id, err := create_planka_task_in_tasklist(list_id, item)
 							if err != nil {
-								log.Printf("Error getting checklist for card %s: %v", cardId, err)
+								fmt.Printf("Error creating task: %w\n", err)
 								continue
 							}
-							list_id, err := create_planka_card_tasklist(cardId, kaiten_list)
-							if err != nil {
-								fmt.Printf("Error creating tasklist")
-							}
-							for _, item := range kaiten_list.Items {
-								task_id, err := create_planka_task_in_tasklist(list_id, item)
-								if err != nil {
-									fmt.Printf("Error creating task: %w\n", err)
-									continue
-								}
-								fmt.Printf("Created task %s\n", task_id)
-							}
-
+							fmt.Printf("Created task %s\n", task_id)
 						}
+
 					}
+
 					comments, err := get_kaiten_comments_for_card(card.ID)
 					if err == nil && comments != nil {
 						for _, comment := range comments {

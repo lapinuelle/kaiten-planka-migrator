@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +41,7 @@ type KaitenCard struct {
 	EndDate     string    `json:"end_date,omitempty"`
 	TagIds      []float64 `json:"tag_ids,omitempty"`
 	Archived    bool      `json:"archived"`
+	Checklists  []float64 `json:"checklists,omitempty"`
 }
 
 type KaitenComment struct {
@@ -253,48 +253,6 @@ func get_kaiten_cards_for_column(columnId float64) ([]KaitenCard, error) {
 	return cards, nil
 }
 
-func read_checklists_from_file() (map[float64][]float64, error) {
-	filepath, exists := os.LookupEnv("KAITEN_CHECKLISTS_FILE")
-	if !exists {
-		return nil, fmt.Errorf("KAITEN_CHECKLISTS_FILE environment variable is not set")
-	}
-	if _, err := os.Stat(filepath); errors.Is(err, os.ErrNotExist) {
-		fmt.Printf("File '%s' does not exist.\n", filepath)
-		return nil, err
-	} else if err != nil {
-		fmt.Printf("Error checking file '%s': %v\n", filepath, err)
-		return nil, err
-	}
-
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		fmt.Printf("Error reading file '%s': %v\n", filepath, err)
-		return nil, err
-	}
-	var checklistsJson []interface{}
-
-	if err := json.Unmarshal(data, &checklistsJson); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
-	}
-	checklists := make(map[float64][]float64)
-	for _, checklist := range checklistsJson {
-		cardId := checklist.(map[string]interface{})["card_id"].(float64)
-		var itemIds []float64
-		if value, ok := checklists[cardId]; ok {
-			itemIds = value
-		}
-		if checklist.(map[string]interface{})["checklist_id"] != nil {
-
-			itemIds = append(itemIds, checklist.(map[string]interface{})["checklist_id"].(float64))
-
-		}
-		checklists[cardId] = itemIds
-	}
-
-	return checklists, nil
-}
-
 func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
 	body, err := kaiten_api_call("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64), "GET")
 	if err != nil {
@@ -302,13 +260,20 @@ func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
 		return KaitenCard{}, err
 	}
 
-	var json_card map[string]interface{}
+	var json_card map[string]any
 
 	if err := json.Unmarshal(body, &json_card); err != nil {
 		fmt.Println("Error parsing JSON:", err)
 		return KaitenCard{}, err
 	}
 	var card KaitenCard
+	if json_card["checklists"] != nil {
+		for _, checklist := range json_card["checklists"].([]any) {
+			if checklist.(map[string]any)["id"] != nil {
+				card.Checklists = append(card.Checklists, checklist.(map[string]any)["id"].(float64))
+			}
+		}
+	}
 	card.ID = json_card["id"].(float64)
 	card.Title = json_card["title"].(string)
 	if json_card["description"] == nil || json_card["description"] == "" {
