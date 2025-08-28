@@ -50,7 +50,7 @@ func main() {
 	if err := json.Unmarshal(rawUsers.([]byte), &users); err != nil {
 		log.Fatalf("failed to parse JSON: %s", err)
 	}
-	emails, err := get_planka_users_emails()
+	emails, err := getPlankaUsersMails()
 	if err != nil {
 		log.Fatalf("Error fetching Planka user emails: %v", err)
 	}
@@ -72,11 +72,11 @@ func main() {
 				log.Printf("Error creating Planka user %s: %v", userData.Username, err)
 				continue
 			}
-			fmt.Printf("Created Planka user: %s\n", userData.Username)
+			log.Printf("Created Planka user: %s\n", userData.Username)
 		}
 	}
 
-	spaces, err := get_kaiten_spaces()
+	spaces, err := getKaitenSpaces()
 	if err != nil {
 		log.Fatalf("Error fetching Kaiten spaces: %v", err)
 	}
@@ -87,29 +87,27 @@ func main() {
 		}
 
 		if space.ParentID == "" {
-			// Creating projects for top-level spaces
+
 			plankaProject, err := createPlankaProject(space)
 			plankaProjects[plankaProject.KaitenSpaceUID] = plankaProject
 			if err != nil {
 				log.Printf("Error creating Planka project for space %s: %v", space.Name, err)
 				continue
 			}
-			fmt.Printf("Planka project: %s with ID: %s\n", plankaProject.Name, plankaProject.ID)
+			log.Printf("Planka project: %s with ID: %s\n", plankaProject.Name, plankaProject.ID)
 
 		}
 	}
-	// Creating boards for each project
-	// If there are multiple boards in a space, they will be prefixed with the space name
-	// If there is only one board, it will be named after the space
+
 	for _, space := range spaces {
 		boardTitlePrefix := ""
-		boards, err := get_kaiten_boards_for_space(space)
+		boards, err := getKaitenBoardsForSpace(space)
 		if err != nil {
 			log.Fatalf("Error getting boards for space")
 		}
 		if len(boards) > 1 {
 			boardTitlePrefix = space.Name + ": "
-			fmt.Printf("%s\n", boardTitlePrefix)
+			log.Printf("%s\n", boardTitlePrefix)
 		}
 
 		spaceIdforBoard := space.UID
@@ -118,23 +116,23 @@ func main() {
 		}
 		spaceUIDforBoardCreation := spaces[spaceIdforBoard].UID
 
-		for _, kaiten_board := range boards {
+		for _, kaitenBoard := range boards {
 			if len(boards) < 2 {
-				kaiten_board.Title = space.Name
+				kaitenBoard.Title = space.Name
 			}
-			fmt.Printf("Board named %s created in project %s\n", boardTitlePrefix+kaiten_board.Title, plankaProjects[spaceUIDforBoardCreation].Name)
-			board, err := createPlankaBoard(plankaProjects[spaceUIDforBoardCreation].ID, kaiten_board, boardTitlePrefix)
+			log.Printf("Board named %s created in project %s\n", boardTitlePrefix+kaitenBoard.Title, plankaProjects[spaceUIDforBoardCreation].Name)
+			board, err := createPlankaBoard(plankaProjects[spaceUIDforBoardCreation].ID, kaitenBoard, boardTitlePrefix)
 			boardLabels := make(map[float64]PlankaLabel)
 			if err != nil {
 				log.Printf("Error creating Planka board for project %s: %v", plankaProjects[spaceUIDforBoardCreation].ID, err)
 				continue
 			}
-			columns, err := get_kaiten_columns_for_board(kaiten_board.ID)
+			columns, err := getKaitenColumnsForBoard(kaitenBoard.ID)
 			if err != nil {
 				log.Printf("Error getting columns for board %s: %v", board.ID, err)
 				continue
 			}
-			emails, err := get_planka_users_emails()
+			emails, err := getPlankaUsersMails()
 			if err != nil {
 				log.Fatalf("Error fetching Planka user emails: %v", err)
 			}
@@ -152,25 +150,20 @@ func main() {
 			}
 			for _, column := range columns {
 				column.Type = "active"
-				if board.Name == "Графика" {
-					fmt.Printf("GOTCHA!\n")
-				}
 				plankaColumn, err := createPlankaList(board.ID, column)
 				if err != nil {
 					log.Printf("Error creating Planka column for board %s: %v", board.ID, err)
 					continue
 				}
-				fmt.Printf("Created Planka column: %s in board: %s\n", plankaColumn.Name, board.Name)
-				cards, err := get_kaiten_cards_for_column(column.Id)
+				log.Printf("Created Planka column: %s in board: %s\n", plankaColumn.Name, board.Name)
+				cards, err := getKaitenCardsForColumn(column.Id)
 				if err != nil {
 					log.Printf("Error getting cards for column %s: %v", column.Id, err)
 					continue
 				}
-				if column.Name == "Готово" && board.Name == "X-CAD" {
-					fmt.Printf("GOTCHAAAAA!")
-				}
+
 				for _, card := range cards {
-					if card.Archived == true {
+					if card.Archived {
 						continue
 					}
 					cardId, err := createPlankaCard(plankaColumn.ID, card)
@@ -213,27 +206,27 @@ func main() {
 					}
 
 					for _, chechlistId := range card.Checklists {
-						kaiten_list, err := get_kaiten_checklist_for_card(card.ID, chechlistId)
+						kaiten_list, err := getKaitenChecklistsForCard(card.ID, chechlistId)
 						if err != nil {
 							log.Printf("Error getting checklist for card %s: %v", cardId, err)
 							continue
 						}
 						list_id, err := createPlankaTasklistForCard(cardId, kaiten_list)
 						if err != nil {
-							fmt.Printf("Error creating tasklist")
+							log.Printf("Error creating tasklist")
 						}
 						for _, item := range kaiten_list.Items {
 							task_id, err := createPlankaTaskInTasklist(list_id, item)
 							if err != nil {
-								fmt.Printf("Error creating task: %w\n", err)
+								log.Printf("Error creating task: %w\n", err)
 								continue
 							}
-							fmt.Printf("Created task %s\n", task_id)
+							log.Printf("Created task %s\n", task_id)
 						}
 
 					}
 
-					comments, err := get_kaiten_comments_for_card(card.ID)
+					comments, err := getKaitenCommentsForCard(card.ID)
 					if err == nil && comments != nil {
 						for _, comment := range comments {
 							err := createPlankaCommentForCard(cardId, comment)
@@ -243,12 +236,12 @@ func main() {
 							}
 						}
 					}
-					attachments, err := get_kaiten_attachments_for_card(card.ID)
+					attachments, err := getKaitenAttachmentsForCard(card.ID)
 					if err != nil {
-						log.Printf("Error getting attachments for card %s: %v", card.ID, err)
+						log.Printf("Error getting attachments for card %f: %v", card.ID, err)
 					}
 					if attachments != nil {
-						fmt.Printf("Got attachments for card %s: %v\n", cardId, attachments)
+						log.Printf("Got attachments for card %s: %v\n", cardId, attachments)
 						for _, attachment := range attachments {
 							_, err := createPlankaAttachmentForCard(cardId, attachment)
 							if err != nil {
@@ -262,7 +255,7 @@ func main() {
 						log.Printf("Error creating Planka card in list %s: %v", plankaColumn.ID, err)
 						continue
 					}
-					fmt.Printf("Created Planka card: %s in list: %s\n", cardId, plankaColumn.Name)
+					log.Printf("Created Planka card: %s in list: %s\n", cardId, plankaColumn.Name)
 				}
 
 			}

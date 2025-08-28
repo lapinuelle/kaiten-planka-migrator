@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -157,20 +158,18 @@ func getKaitenTags() (map[float64]KaitenTag, error) {
 	return result, nil
 }
 
-func get_kaiten_spaces() (map[string]KaitenSpace, error) {
+func getKaitenSpaces() (map[string]KaitenSpace, error) {
 	body, err := kaitenAPICall("/api/latest/spaces", "GET")
 
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 
 	var json_spaces []interface{}
 	spaces := make(map[string]KaitenSpace)
 
 	if err := json.Unmarshal(body, &json_spaces); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
 	for _, space := range json_spaces {
 		if spaceMap, ok := space.(map[string]interface{}); ok {
@@ -186,16 +185,16 @@ func get_kaiten_spaces() (map[string]KaitenSpace, error) {
 				ParentID: parent_uid,
 				UID:      spaceMap["uid"].(string),
 			}
-			fmt.Printf("%s\n", spaces[spaceMap["uid"].(string)].ChildIdDs)
+			log.Printf("%s\n", spaces[spaceMap["uid"].(string)].ChildIdDs)
 		} else {
-			fmt.Println("Error converting space to KaitenSpace struct")
+			return nil, fmt.Errorf("error converting space to KaitenSpace struct: %w", err)
 		}
 	}
 	for _, space := range json_spaces {
 		if spaceMap, ok := space.(map[string]interface{}); ok {
 			if spaceMap["parent_entity_uid"] != nil {
 				parentSpace := spaces[spaceMap["parent_entity_uid"].(string)]
-				fmt.Printf("Parent Space: %s, Space: %s\n", parentSpace.Name, spaceMap["title"].(string))
+				log.Printf("Parent Space: %s, Space: %s\n", parentSpace.Name, spaceMap["title"].(string))
 				parentSpace.ChildIdDs = append(spaces[spaceMap["parent_entity_uid"].(string)].ChildIdDs, spaceMap["uid"].(string))
 				spaces[spaceMap["parent_entity_uid"].(string)] = parentSpace
 			}
@@ -205,18 +204,16 @@ func get_kaiten_spaces() (map[string]KaitenSpace, error) {
 	return spaces, nil
 }
 
-func get_kaiten_boards_for_space(Space KaitenSpace) ([]KaitenBoard, error) {
-	body, err := kaitenAPICall("/api/latest/spaces/"+strconv.FormatFloat(Space.ID, 'f', -1, 64)+"/boards", "GET")
+func getKaitenBoardsForSpace(space KaitenSpace) ([]KaitenBoard, error) {
+	body, err := kaitenAPICall("/api/latest/spaces/"+strconv.FormatFloat(space.ID, 'f', -1, 64)+"/boards", "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 
 	var json_boards []interface{}
 	var boards []KaitenBoard
 	if err := json.Unmarshal(body, &json_boards); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
 	for _, brd := range json_boards {
 		boards = append(boards, KaitenBoard{
@@ -228,21 +225,19 @@ func get_kaiten_boards_for_space(Space KaitenSpace) ([]KaitenBoard, error) {
 
 }
 
-func get_kaiten_columns_for_board(boardId float64) ([]KaitenColumn, error) {
+func getKaitenColumnsForBoard(boardId float64) ([]KaitenColumn, error) {
 	body, err := kaitenAPICall("/api/latest/boards/"+strconv.FormatFloat(boardId, 'f', -1, 64)+"/columns", "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 
-	var json_columns []interface{}
+	var jsonColumns []interface{}
 
-	if err := json.Unmarshal(body, &json_columns); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+	if err := json.Unmarshal(body, &jsonColumns); err != nil {
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
 	var columns []KaitenColumn
-	for _, col := range json_columns {
+	for _, col := range jsonColumns {
 		columns = append(columns, KaitenColumn{
 			Position: col.(map[string]interface{})["sort_order"].(float64),
 			Name:     col.(map[string]interface{})["title"].(string),
@@ -252,103 +247,98 @@ func get_kaiten_columns_for_board(boardId float64) ([]KaitenColumn, error) {
 	return columns, nil
 }
 
-func get_kaiten_cards_for_column(columnId float64) ([]KaitenCard, error) {
+func getKaitenCardsForColumn(columnId float64) ([]KaitenCard, error) {
 	body, err := kaitenAPICall("/api/latest/cards?column_ids="+strconv.FormatFloat(columnId, 'f', -1, 64), "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 
-	var json_cards []interface{}
+	var jsonCards []interface{}
 
-	if err := json.Unmarshal(body, &json_cards); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+	if err := json.Unmarshal(body, &jsonCards); err != nil {
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
 	var cards []KaitenCard
-	for _, json_card := range json_cards {
-		card, err := get_kaiten_card_by_id(json_card.(map[string]interface{})["id"].(float64))
+	for _, jsonCard := range jsonCards {
+		card, err := getKaitenCardById(jsonCard.(map[string]interface{})["id"].(float64))
 		if err != nil {
-			fmt.Println("Error getting card by ID:", err)
-			continue
+			return nil, fmt.Errorf("error getting card by ID: %w", err)
 		}
 		cards = append(cards, card)
 	}
 	return cards, nil
 }
 
-func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
+func getKaitenCardById(cardId float64) (KaitenCard, error) {
 	body, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64), "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return KaitenCard{}, err
+		return KaitenCard{}, fmt.Errorf("error reading response body: %w", err)
 	}
 
-	var json_card map[string]any
+	var jsonCard map[string]any
 
-	if err := json.Unmarshal(body, &json_card); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return KaitenCard{}, err
+	if err := json.Unmarshal(body, &jsonCard); err != nil {
+		return KaitenCard{}, fmt.Errorf("error parsing JSON: %w", err)
 	}
 	var card KaitenCard
-	if json_card["checklists"] != nil {
-		for _, checklist := range json_card["checklists"].([]any) {
+	if jsonCard["checklists"] != nil {
+		for _, checklist := range jsonCard["checklists"].([]any) {
 			if checklist.(map[string]any)["id"] != nil {
 				card.Checklists = append(card.Checklists, checklist.(map[string]any)["id"].(float64))
 			}
 		}
 	}
-	card.ID = json_card["id"].(float64)
-	card.Title = json_card["title"].(string)
-	if json_card["description"] == nil || json_card["description"] == "" {
+	card.ID = jsonCard["id"].(float64)
+	card.Title = jsonCard["title"].(string)
+	if jsonCard["description"] == nil || jsonCard["description"] == "" {
 		card.Description = " "
 
 	} else {
-		card.Description = json_card["description"].(string)
+		card.Description = jsonCard["description"].(string)
 	}
-	if json_card["archived"] != nil {
-		card.Archived = json_card["archived"].(bool)
+	if jsonCard["archived"] != nil {
+		card.Archived = jsonCard["archived"].(bool)
 	} else {
 		card.Archived = false
 	}
-	if json_card["due_date"] != nil {
-		card.DueDate = json_card["due_date"].(string)
+	if jsonCard["due_date"] != nil {
+		card.DueDate = jsonCard["due_date"].(string)
 		card.StartDate = ""
 		card.EndDate = ""
 	} else {
 		card.DueDate = ""
-		if json_card["planned_start"] != nil {
-			card.StartDate = json_card["planned_start"].(string)
+		if jsonCard["planned_start"] != nil {
+			card.StartDate = jsonCard["planned_start"].(string)
 		} else {
 			card.StartDate = ""
 		}
-		if json_card["planned_end"] != nil {
-			card.EndDate = json_card["planned_end"].(string)
+		if jsonCard["planned_end"] != nil {
+			card.EndDate = jsonCard["planned_end"].(string)
 		} else {
 			card.EndDate = ""
 		}
 	}
 	var tagIds []float64
-	if json_card["tag_ids"] != nil {
-		for _, id := range json_card["tag_ids"].([]interface{}) {
+	if jsonCard["tag_ids"] != nil {
+		for _, id := range jsonCard["tag_ids"].([]interface{}) {
 			tagIds = append(tagIds, id.(float64))
 		}
 		card.TagIds = tagIds
 	}
-	if json_card["sort_order"].(float64) < 1 {
+	if jsonCard["sort_order"].(float64) < 1 {
 		card.SortOrder = 1
 	} else {
-		card.SortOrder = json_card["sort_order"].(float64)
+		card.SortOrder = jsonCard["sort_order"].(float64)
 	}
 
-	if json_card["members"] != nil {
-		for _, member := range json_card["members"].([]interface{}) {
+	if jsonCard["members"] != nil {
+		for _, member := range jsonCard["members"].([]interface{}) {
 			card.Memders = append(card.Memders, member.(map[string]interface{})["email"].(string))
 		}
 	}
-	if json_card["properties"] != nil {
-		if json_card["properties"].(map[string]interface{}) != nil {
-			for _, value := range json_card["properties"].(map[string]interface{}) {
+	if jsonCard["properties"] != nil {
+		if jsonCard["properties"].(map[string]interface{}) != nil {
+			for _, value := range jsonCard["properties"].(map[string]interface{}) {
 				card.Description = "## Детализация\n\n" + value.(string) + "\n\n## Описание" + card.Description
 			}
 		}
@@ -356,22 +346,22 @@ func get_kaiten_card_by_id(cardId float64) (KaitenCard, error) {
 	return card, nil
 }
 
-func get_kaiten_comments_for_card(cardId float64) ([]KaitenComment, error) {
+func getKaitenCommentsForCard(cardId float64) ([]KaitenComment, error) {
 	body, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/comments", "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
+
 	if string(body) == "[]" {
 		return nil, nil
 	}
-	var json_comments []interface{}
-	if err := json.Unmarshal(body, &json_comments); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+
+	var jsonComments []interface{}
+	if err := json.Unmarshal(body, &jsonComments); err != nil {
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
 	var comments []KaitenComment
-	for _, cmt := range json_comments {
+	for _, cmt := range jsonComments {
 		comments = append(comments, KaitenComment{
 			ID:          cmt.(map[string]interface{})["id"].(float64),
 			AuthorEmail: cmt.(map[string]interface{})["author"].(map[string]interface{})["email"].(string),
@@ -382,53 +372,49 @@ func get_kaiten_comments_for_card(cardId float64) ([]KaitenComment, error) {
 	return comments, nil
 }
 
-func get_kaiten_attachments_for_card(cardId float64) ([]KaitenAttachment, error) {
+func getKaitenAttachmentsForCard(cardId float64) ([]KaitenAttachment, error) {
 	attachments, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/files", "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 	if string(attachments) == "[]" {
 		return nil, nil
 	}
 	var attachmentsInterface []interface{}
 	if err := json.Unmarshal(attachments, &attachmentsInterface); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return nil, err
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
 	}
-	var kaiten_attachments []KaitenAttachment
+	var kaitenAttachments []KaitenAttachment
 	for _, att := range attachmentsInterface {
-		kaiten_attachments = append(kaiten_attachments, KaitenAttachment{
+		kaitenAttachments = append(kaitenAttachments, KaitenAttachment{
 			Name: att.(map[string]interface{})["name"].(string),
 			URL:  att.(map[string]interface{})["url"].(string),
 		})
 
 	}
-	return kaiten_attachments, nil
+	return kaitenAttachments, nil
 }
 
-func get_kaiten_checklist_for_card(card_id float64, checklist_id float64) (KaitenChecklist, error) {
-	data, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(card_id, 'f', -1, 64)+"/checklists/"+strconv.FormatFloat(checklist_id, 'f', -1, 64), "GET")
+func getKaitenChecklistsForCard(cardId float64, checklist_id float64) (KaitenChecklist, error) {
+	data, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/checklists/"+strconv.FormatFloat(checklist_id, 'f', -1, 64), "GET")
 	if err != nil {
-		fmt.Println("Error reading response body:", err)
-		return KaitenChecklist{}, err
+		return KaitenChecklist{}, fmt.Errorf("error reading response body: %w", err)
 	}
-	var checklist_json interface{}
-	if err := json.Unmarshal(data, &checklist_json); err != nil {
-		fmt.Println("Error parsing JSON:", err)
-		return KaitenChecklist{}, err
+	var checklistJson interface{}
+	if err := json.Unmarshal(data, &checklistJson); err != nil {
+		return KaitenChecklist{}, fmt.Errorf("error parsing JSON: %w", err)
 	}
-	var checklist_items_json []interface{}
-	checklist_items_json = checklist_json.(map[string]interface{})["items"].([]interface{})
-	var checklist_items []KaitenChecklistItem
+	var checklistItemsJson []interface{}
+	checklistItemsJson = checklistJson.(map[string]interface{})["items"].([]interface{})
+	var checklistItems []KaitenChecklistItem
 	var checklist KaitenChecklist
-	checklist.Name = checklist_json.(map[string]interface{})["name"].(string)
-	for _, item := range checklist_items_json {
-		checklist_items = append(checklist_items, KaitenChecklistItem{
+	checklist.Name = checklistJson.(map[string]interface{})["name"].(string)
+	for _, item := range checklistItemsJson {
+		checklistItems = append(checklistItems, KaitenChecklistItem{
 			Text:    item.(map[string]interface{})["text"].(string),
 			Checked: item.(map[string]interface{})["checked"].(bool),
 		})
-		checklist.Items = checklist_items
+		checklist.Items = checklistItems
 	}
 	return checklist, nil
 }
