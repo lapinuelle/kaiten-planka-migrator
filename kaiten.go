@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type KaitenSpace struct {
@@ -71,8 +74,9 @@ type KaitenTag struct {
 	Color float64 `json:"color"`
 }
 
+var kaitenLimiter = rate.NewLimiter(rate.Every(time.Second/4), 1)
+
 func kaitenAPICall(url string, method string) ([]byte, error) {
-	time.Sleep(time.Millisecond * 300)
 
 	kaitenUrl, err := getEnv("KAITEN_URL")
 	if err != nil {
@@ -96,7 +100,11 @@ func kaitenAPICall(url string, method string) ([]byte, error) {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
+	err = kaitenLimiter.Wait(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for rate limiter: %w", err)
 
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
