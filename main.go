@@ -34,6 +34,9 @@ func init() {
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
 	}
+	if err := initPlankaEnv(); err != nil {
+		log.Fatalf("Cannot get variable values for PLANKA API: %v", err)
+	}
 }
 
 func getEnv(name string) (string, error) {

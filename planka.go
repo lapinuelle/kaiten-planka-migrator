@@ -9,6 +9,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 )
 
 var PlankaColors = []string{
@@ -107,16 +109,36 @@ type PlankaLabelForCard struct {
 	ID string `json:"labelId"`
 }
 
-func plankaAPICall(jsonPayload []byte, endpoint string, method string) ([]byte, error) {
+var (
+	// Planka environment variables cache
+	plankaURL   string
+	plankaToken string
+	plankaOnce  sync.Once
+	plankaErr   error
+)
 
-	plankaUrl, err := getEnv("PLANKA_URL")
-	if err != nil {
-		return nil, err
-	}
-	plankaToken, err := getEnv("PLANKA_TOKEN")
-	if err != nil {
-		return nil, err
-	}
+// initPlankaEnv initializes Planka environment variables once
+func initPlankaEnv() error {
+	plankaOnce.Do(func() {
+		plankaURL, plankaErr = getEnv("PLANKA_URL")
+		if plankaErr != nil {
+			plankaErr = fmt.Errorf("failed to get PLANKA_URL: %w", plankaErr)
+			return
+		}
+
+		plankaToken, plankaErr = getEnv("PLANKA_TOKEN")
+		if plankaErr != nil {
+			plankaErr = fmt.Errorf("failed to get PLANKA_TOKEN: %w", plankaErr)
+			return
+		}
+
+		// Normalize URL
+		plankaURL = strings.TrimRight(plankaURL, "/")
+	})
+	return plankaErr
+}
+
+func plankaAPICall(jsonPayload []byte, endpoint string, method string) ([]byte, error) {
 
 	validMethods := map[string]bool{
 		"GET":    true,
@@ -130,10 +152,11 @@ func plankaAPICall(jsonPayload []byte, endpoint string, method string) ([]byte, 
 	}
 
 	var req *http.Request
+	var err error
 	if method == "GET" {
-		req, err = http.NewRequest(method, plankaUrl+endpoint, nil)
+		req, err = http.NewRequest(method, plankaURL+endpoint, nil)
 	} else {
-		req, err = http.NewRequest(method, plankaUrl+endpoint, bytes.NewBuffer(jsonPayload))
+		req, err = http.NewRequest(method, plankaURL+endpoint, bytes.NewBuffer(jsonPayload))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -689,6 +712,7 @@ func createPlankaCommentForCard(cardId string, comment KaitenComment) error {
 	}
 	body, err := plankaAPICallByUser(commentJson, "/api/cards/"+cardId+"/comments", "POST", token)
 	if body == nil && err != nil {
+		fmt.Println("Response body:", body)
 		return fmt.Errorf("failed to create comment")
 	}
 	return nil

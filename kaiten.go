@@ -86,7 +86,7 @@ type KaitenUser struct {
 }
 
 var (
-	kaitenLimiter = rate.NewLimiter(rate.Every(time.Second/4), 2)
+	kaitenLimiter = rate.NewLimiter(rate.Every(time.Second/4), 1)
 
 	kaitenURL   string
 	kaitenToken string
