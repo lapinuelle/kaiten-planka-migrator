@@ -33,10 +33,12 @@ type KaitenColumn struct {
 	Name     string  `json:"name"`
 	Type     string  `json:"type"`
 	Id       float64 `json:"id"`
+	BoardID  float64 `json:"board_id"`
 }
 
 type KaitenCard struct {
 	ID          float64   `json:"id"`
+	BoardID     float64   `json:"board_id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	SortOrder   float64   `json:"sort_order"`
@@ -273,6 +275,7 @@ func getKaitenColumnsForBoard(boardId float64) ([]KaitenColumn, error) {
 			Position: col.(map[string]interface{})["sort_order"].(float64),
 			Name:     col.(map[string]interface{})["title"].(string),
 			Id:       col.(map[string]interface{})["id"].(float64),
+			BoardID:  boardId,
 		})
 	}
 	return columns, nil
