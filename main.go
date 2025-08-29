@@ -45,8 +45,6 @@ func getEnv(name string) (string, error) {
 }
 
 func main() {
-
-	startTime := time.Now()
 	var wg sync.WaitGroup
 	errChan := make(chan error, 10)
 
@@ -192,9 +190,6 @@ func main() {
 		}(space)
 	}
 	wg.Wait()
-	endTime := time.Since(startTime)
-	fmt.Println("Time consumed:", endTime)
-	os.Exit(0)
 
 	for _, space := range spaces {
 		boardTitlePrefix := ""
