@@ -9,7 +9,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"time"
 )
 
 var PlankaColors = []string{
@@ -143,7 +142,8 @@ func plankaAPICall(jsonPayload []byte, endpoint string, method string) ([]byte, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+plankaToken)
 
-	client := &http.Client{}
+	client := clientPool.Get().(*http.Client)
+	defer clientPool.Put(client)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -210,9 +210,8 @@ func plankaUploadFile(filepath string, url string, filename string) ([]byte, err
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+plankaToken)
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	client := clientPool.Get().(*http.Client)
+	defer clientPool.Put(client)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -246,9 +245,8 @@ func plankaAPICallByUser(jsonPayload []byte, url string, method string, token st
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Authorization", "Bearer "+token)
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
+	client := clientPool.Get().(*http.Client)
+	defer clientPool.Put(client)
 
 	resp, err := client.Do(req)
 	if err != nil {

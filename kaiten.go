@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -38,7 +40,7 @@ type KaitenCard struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	SortOrder   float64   `json:"sort_order"`
-	Memders     []string  `json:"members"`
+	Members     []string  `json:"members"`
 	DueDate     string    `json:"due_date,omitempty"`
 	StartDate   string    `json:"start_date,omitempty"`
 	EndDate     string    `json:"end_date,omitempty"`
@@ -75,21 +77,52 @@ type KaitenTag struct {
 	Color float64 `json:"color"`
 }
 
-var kaitenLimiter = rate.NewLimiter(rate.Every(time.Second/4), 1)
+type KaitenUser struct {
+	Email    string `json:"email"`
+	FullName string `json:"full_name"`
+	Username string `json:"username"`
+}
+
+var (
+	kaitenLimiter = rate.NewLimiter(rate.Every(time.Second/4), 2)
+
+	kaitenURL   string
+	kaitenToken string
+	envInitOnce sync.Once
+	envInitErr  error
+)
+
+func initKaitenEnv() error {
+	envInitOnce.Do(func() {
+		kaitenURL, envInitErr = getEnv("KAITEN_URL")
+		if envInitErr != nil {
+			envInitErr = fmt.Errorf("failed to get KAITEN_URL: %w", envInitErr)
+			return
+		}
+
+		kaitenToken, envInitErr = getEnv("KAITEN_TOKEN")
+		if envInitErr != nil {
+			envInitErr = fmt.Errorf("failed to get KAITEN_TOKEN: %w", envInitErr)
+			return
+		}
+
+		kaitenURL = strings.TrimRight(kaitenURL, "/")
+	})
+	return envInitErr
+}
 
 func kaitenAPICall(url string, method string) ([]byte, error) {
+	return kaitenAPICallWithContext(context.Background(), url, method)
+}
 
-	kaitenUrl, err := getEnv("KAITEN_URL")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get KAITEN_URL: %w", err)
+func kaitenAPICallWithContext(ctx context.Context, url string, method string) ([]byte, error) {
+	if err := initKaitenEnv(); err != nil {
+		return nil, err
 	}
 
-	kaitenToken, err := getEnv("KAITEN_TOKEN")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get KAITEN_TOKEN: %w", err)
-	}
+	fullURL := kaitenURL + "/" + strings.TrimPrefix(url, "/")
 
-	req, err := http.NewRequest(method, kaitenUrl+url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -98,28 +131,26 @@ func kaitenAPICall(url string, method string) ([]byte, error) {
 	req.Header.Set("Authorization", "Bearer "+kaitenToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	err = kaitenLimiter.Wait(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to wait for rate limiter: %w", err)
+	client := clientPool.Get().(*http.Client)
+	defer clientPool.Put(client)
 
+	if err := kaitenLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("failed to wait for rate limiter: %w", err)
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, body)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
 	}
 
 	return body, nil
@@ -333,7 +364,7 @@ func getKaitenCardById(cardId float64) (KaitenCard, error) {
 
 	if jsonCard["members"] != nil {
 		for _, member := range jsonCard["members"].([]interface{}) {
-			card.Memders = append(card.Memders, member.(map[string]interface{})["email"].(string))
+			card.Members = append(card.Members, member.(map[string]interface{})["email"].(string))
 		}
 	}
 	if jsonCard["properties"] != nil {
@@ -395,8 +426,8 @@ func getKaitenAttachmentsForCard(cardId float64) ([]KaitenAttachment, error) {
 	return kaitenAttachments, nil
 }
 
-func getKaitenChecklistsForCard(cardId float64, checklist_id float64) (KaitenChecklist, error) {
-	data, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/checklists/"+strconv.FormatFloat(checklist_id, 'f', -1, 64), "GET")
+func getKaitenChecklistsForCard(cardId float64, checklistId float64) (KaitenChecklist, error) {
+	data, err := kaitenAPICall("/api/latest/cards/"+strconv.FormatFloat(cardId, 'f', -1, 64)+"/checklists/"+strconv.FormatFloat(checklistId, 'f', -1, 64), "GET")
 	if err != nil {
 		return KaitenChecklist{}, fmt.Errorf("error reading response body: %w", err)
 	}

@@ -4,14 +4,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
-	"slices"
+	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
+var (
+	clientPool = &sync.Pool{
+		New: func() interface{} {
+			return &http.Client{
+				Timeout: 30 * time.Second,
+				Transport: &http.Transport{
+					MaxIdleConns:        100,
+					MaxIdleConnsPerHost: 100,
+					IdleConnTimeout:     90 * time.Second,
+					TLSHandshakeTimeout: 10 * time.Second,
+					DisableKeepAlives:   false,
+					ForceAttemptHTTP2:   true,
+				},
+			}
+		},
+	}
+)
+
 func init() {
-	// loads values from .env into the system
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
 	}
@@ -27,77 +46,155 @@ func getEnv(name string) (string, error) {
 
 func main() {
 
-	err := plankaDeleteUser()
-	if err != nil {
-		log.Fatalf("Error deleting Planka users: %v", err)
-	}
-	err = deletePlankaProjects()
-	if err != nil {
-		log.Fatalf("Error deleting Planka projects: %v", err)
+	startTime := time.Now()
+	var wg sync.WaitGroup
+	errChan := make(chan error, 10)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := plankaDeleteUser(); err != nil {
+			errChan <- fmt.Errorf("error deleting Planka users: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		if err := deletePlankaProjects(); err != nil {
+			errChan <- fmt.Errorf("error deleting Planka projects: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	select {
+	case err := <-errChan:
+		log.Fatal(err)
+	default:
+
 	}
 
-	rawUsers, err := getKaitenUsers()
-	if err != nil {
-		log.Fatalf("Error getting users from Kaiten: %v", err)
-	}
+	var rawUsers interface{}
+	var tags map[float64]KaitenTag
+	var emails []string
 
-	tags, err := getKaitenTags()
-	if err != nil {
-		log.Fatalf("Error getting tags from Kaiten: %v", err)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		var err error
+		rawUsers, err = getKaitenUsers()
+		if err != nil {
+			errChan <- fmt.Errorf("error getting users from Kaiten: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		var err error
+		tags, err = getKaitenTags()
+		if err != nil {
+			errChan <- fmt.Errorf("error getting tags from Kaiten: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		var err error
+		emails, err = getPlankaUsersMails()
+		if err != nil {
+			errChan <- fmt.Errorf("error fetching Planka user emails: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	select {
+	case err := <-errChan:
+		log.Fatal(err)
+	default:
 	}
 
 	var users interface{}
 	if err := json.Unmarshal(rawUsers.([]byte), &users); err != nil {
 		log.Fatalf("failed to parse JSON: %s", err)
 	}
-	emails, err := getPlankaUsersMails()
-	if err != nil {
-		log.Fatalf("Error fetching Planka user emails: %v", err)
+
+	emailSet := make(map[string]struct{}, len(emails))
+	for _, email := range emails {
+		emailSet[email] = struct{}{}
 	}
+
+	var kaitenUsers []KaitenUser
 	for _, user := range users.([]interface{}) {
-		if !slices.Contains(emails, user.(map[string]interface{})["email"].(string)) {
-			name := user.(map[string]interface{})["full_name"].(string)
-			if name == "" {
-				name = user.(map[string]interface{})["username"].(string)
-			}
-			userData := PlankaUser{
-				Username: user.(map[string]interface{})["username"].(string),
-				Name:     name,
-				Email:    user.(map[string]interface{})["email"].(string),
-				Password: "1234tempPass",
-				Role:     "projectOwner",
-			}
-			err := createPlankaUser(userData)
-			if err != nil {
-				log.Printf("Error creating Planka user %s: %v", userData.Username, err)
-				continue
-			}
-			log.Printf("Created Planka user: %s\n", userData.Username)
+		userMap, ok := user.(map[string]interface{})
+		if !ok {
+			log.Println("Skipping invalid user data")
+			continue
 		}
+
+		kaitenUsers = append(kaitenUsers, KaitenUser{
+			Email:    userMap["email"].(string),
+			FullName: userMap["full_name"].(string),
+			Username: userMap["username"].(string),
+		})
 	}
+
+	wg.Add(len(kaitenUsers))
+
+	for _, user := range kaitenUsers {
+		go func(user KaitenUser) {
+			defer wg.Done()
+
+			if _, exists := emailSet[user.Email]; !exists {
+				name := user.FullName
+				if name == "" {
+					name = user.Username
+				}
+				userData := PlankaUser{
+					Username: user.Username,
+					Name:     name,
+					Email:    user.Email,
+					Password: "1234tempPass",
+					Role:     "projectOwner",
+				}
+				if err := createPlankaUser(userData); err != nil {
+					log.Printf("Error creating Planka user %s: %v", userData.Username, err)
+					return
+				}
+				log.Printf("Created Planka user: %s\n", userData.Username)
+			}
+		}(user)
+	}
+	wg.Wait()
 
 	spaces, err := getKaitenSpaces()
 	if err != nil {
 		log.Fatalf("Error fetching Kaiten spaces: %v", err)
 	}
+
 	plankaProjects := make(map[string]PlankaProject)
+	var projectsMutex sync.Mutex
+
+	wg.Add(len(spaces))
 	for _, space := range spaces {
-		if err != nil {
-			log.Fatalf("Error getting boards for space")
-		}
+		go func(space KaitenSpace) {
+			defer wg.Done()
+			if space.ParentID == "" {
+				plankaProject, err := createPlankaProject(space)
+				if err != nil {
+					log.Printf("Error creating Planka project for space %s: %v", space.Name, err)
+					return
+				}
 
-		if space.ParentID == "" {
-
-			plankaProject, err := createPlankaProject(space)
-			plankaProjects[plankaProject.KaitenSpaceUID] = plankaProject
-			if err != nil {
-				log.Printf("Error creating Planka project for space %s: %v", space.Name, err)
-				continue
+				projectsMutex.Lock()
+				plankaProjects[plankaProject.KaitenSpaceUID] = plankaProject
+				projectsMutex.Unlock()
+				log.Printf("Planka project: %s with ID: %s\n", plankaProject.Name, plankaProject.ID)
 			}
-			log.Printf("Planka project: %s with ID: %s\n", plankaProject.Name, plankaProject.ID)
-
-		}
+		}(space)
 	}
+	wg.Wait()
+	endTime := time.Since(startTime)
+	fmt.Println("Time consumed:", endTime)
+	os.Exit(0)
 
 	for _, space := range spaces {
 		boardTitlePrefix := ""
@@ -168,11 +265,12 @@ func main() {
 					}
 					cardId, err := createPlankaCard(plankaColumn.ID, card)
 					if err != nil {
-						log.Fatalf("Can't create card")
+						log.Printf("Error creating Planka card in column %s: %v", plankaColumn.ID, err)
+						continue
 					}
-					if card.Memders != nil {
+					if card.Members != nil {
 
-						for _, member := range card.Memders {
+						for _, member := range card.Members {
 							userId, err := getPlankaUserIDByEmail(member)
 							if err != nil {
 								log.Printf("Error getting Planka user ID for email %s: %v", member, err)
@@ -194,6 +292,9 @@ func main() {
 								label, err := createPlankaLabelForBoard(board.ID, tags[tagID])
 								if err == nil {
 									boardLabels[tagID] = label
+								} else {
+									log.Printf("Error creating label for tag %f: %v", tagID, err)
+									continue
 								}
 							}
 							err = createPlankaLabelForCard(cardId, boardLabels[tagID].Id)
@@ -204,26 +305,27 @@ func main() {
 
 						}
 					}
-
-					for _, chechlistId := range card.Checklists {
-						kaiten_list, err := getKaitenChecklistsForCard(card.ID, chechlistId)
-						if err != nil {
-							log.Printf("Error getting checklist for card %s: %v", cardId, err)
-							continue
-						}
-						list_id, err := createPlankaTasklistForCard(cardId, kaiten_list)
-						if err != nil {
-							log.Printf("Error creating tasklist")
-						}
-						for _, item := range kaiten_list.Items {
-							task_id, err := createPlankaTaskInTasklist(list_id, item)
+					if len(card.Checklists) > 0 {
+						for _, chechlistId := range card.Checklists {
+							kaitenList, err := getKaitenChecklistsForCard(card.ID, chechlistId)
 							if err != nil {
-								log.Printf("Error creating task: %w\n", err)
+								log.Printf("Error getting checklist for card %s: %v", cardId, err)
 								continue
 							}
-							log.Printf("Created task %s\n", task_id)
-						}
+							listId, err := createPlankaTasklistForCard(cardId, kaitenList)
+							if err != nil {
+								log.Printf("Error creating tasklist")
+							}
+							for _, item := range kaitenList.Items {
+								taskId, err := createPlankaTaskInTasklist(listId, item)
+								if err != nil {
+									log.Printf("Error creating task: %w\n", err)
+									continue
+								}
+								log.Printf("Created task %s\n", taskId)
+							}
 
+						}
 					}
 
 					comments, err := getKaitenCommentsForCard(card.ID)
@@ -243,18 +345,13 @@ func main() {
 					if attachments != nil {
 						log.Printf("Got attachments for card %s: %v\n", cardId, attachments)
 						for _, attachment := range attachments {
-							_, err := createPlankaAttachmentForCard(cardId, attachment)
-							if err != nil {
+							if _, err := createPlankaAttachmentForCard(cardId, attachment); err != nil {
 								log.Printf("Error creating Planka attachment for card %s: %v", cardId, err)
 								continue
 							}
 						}
 					}
 
-					if err != nil {
-						log.Printf("Error creating Planka card in list %s: %v", plankaColumn.ID, err)
-						continue
-					}
 					log.Printf("Created Planka card: %s in list: %s\n", cardId, plankaColumn.Name)
 				}
 
