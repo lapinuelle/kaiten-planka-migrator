@@ -111,10 +111,12 @@ type PlankaLabelForCard struct {
 
 var (
 	// Planka environment variables cache
-	plankaURL   string
-	plankaToken string
-	plankaOnce  sync.Once
-	plankaErr   error
+	plankaURL       string
+	plankaToken     string
+	plankaOnce      sync.Once
+	plankaErr       error
+	plankaAdminMail string
+	plankaAdminPass string
 )
 
 // initPlankaEnv initializes Planka environment variables once
@@ -129,6 +131,18 @@ func initPlankaEnv() error {
 		plankaToken, plankaErr = getEnv("PLANKA_TOKEN")
 		if plankaErr != nil {
 			plankaErr = fmt.Errorf("failed to get PLANKA_TOKEN: %w", plankaErr)
+			return
+		}
+
+		plankaAdminMail, plankaErr = getEnv("ADMIN_EMAIL")
+		if plankaErr != nil {
+			plankaErr = fmt.Errorf("failed to get ADMIN_EMAIL: %w", plankaErr)
+			return
+		}
+
+		plankaAdminPass, plankaErr = getEnv("ADMIN_PASSWORD")
+		if plankaErr != nil {
+			plankaErr = fmt.Errorf("failed to get ADMIN_PASSWORD: %w", plankaErr)
 			return
 		}
 
@@ -296,11 +310,6 @@ func plankaDeleteUser() error {
 		return fmt.Errorf("error fetching Planka user emails: %w", err)
 	}
 
-	adminEmail, exists := os.LookupEnv("ADMIN_EMAIL")
-	if !exists {
-		return fmt.Errorf("ADMIN_EMAIL environment variable is not set")
-	}
-
 	var validEmails []string
 	for _, email := range emails {
 		if email != "" {
@@ -311,7 +320,7 @@ func plankaDeleteUser() error {
 	}
 
 	for _, email := range validEmails {
-		if email == adminEmail {
+		if email == plankaAdminMail {
 			log.Printf("Skipping admin user with email %s\n", email)
 			continue
 		}
@@ -650,18 +659,10 @@ func createPlankaCard(listId string, card KaitenCard) (string, error) {
 }
 
 func getPlankaAccessToken(email string) (string, error) {
-	admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
-	if !exists {
-		return "", fmt.Errorf("PLANKA_URL environment variable is not set")
-	}
 	var user PlankaUserCreds
 	user.Email = email
-	if email == admin_email {
-		admin_password, exists := os.LookupEnv("ADMIN_PASSWORD")
-		if !exists {
-			return "", fmt.Errorf("ADMIN_PASSWORD environment variable is not set")
-		}
-		user.Password = admin_password
+	if email == plankaAdminMail {
+		user.Password = plankaAdminPass
 	} else {
 		user.Password = "1234tempPass"
 	}
@@ -689,11 +690,7 @@ func createPlankaCommentForCard(cardId string, comment KaitenComment) error {
 	token, err := getPlankaAccessToken(comment.AuthorEmail)
 	if err != nil {
 		log.Printf("error getting Planka access token for email %s: %w", comment.AuthorEmail, err)
-		admin_email, exists := os.LookupEnv("ADMIN_EMAIL")
-		if !exists {
-			return fmt.Errorf("PLANKA_URL environment variable is not set")
-		}
-		token, err = getPlankaAccessToken(admin_email)
+		token, err = getPlankaAccessToken(plankaAdminMail)
 		if err != nil {
 			return fmt.Errorf("error getting Planka access token for email %s: %w", comment.AuthorEmail, err)
 		}
