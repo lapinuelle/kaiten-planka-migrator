@@ -75,8 +75,8 @@ func main() {
 	}
 
 	var rawUsers interface{}
-	var tags map[float64]KaitenTag
 	var emails []string
+	var tags map[float64]KaitenTag
 
 	wg.Add(3)
 	go func() {
@@ -217,8 +217,7 @@ func main() {
 			}
 			log.Printf("Board named %s created in project %s\n", boardTitlePrefix+kaitenBoard.Title, plankaProjects[spaceUIDforBoardCreation].Name)
 			board, err := createPlankaBoard(plankaProjects[spaceUIDforBoardCreation].ID, kaitenBoard, boardTitlePrefix)
-			boardLabels := make(map[float64]PlankaLabel)
-			boardLabelsMutex := &sync.Mutex{}
+
 			if err != nil {
 				log.Printf("Error creating Planka board for project %s: %v", plankaProjects[spaceUIDforBoardCreation].ID, err)
 				continue
@@ -285,99 +284,10 @@ func main() {
 						}
 
 					}
-					if card.TagIds != nil {
-						wg.Add(len(card.TagIds))
 
-						semaphore := make(chan struct{}, 5)
+					processCardTags(card, cardId, board.ID, tags)
 
-						for _, tagID := range card.TagIds {
-							go func(tagID float64) {
-								defer wg.Done()
-
-								semaphore <- struct{}{}
-								defer func() { <-semaphore }()
-
-								boardLabelsMutex.Lock()
-								label, exists := boardLabels[tagID]
-								boardLabelsMutex.Unlock()
-
-								if !exists {
-									newLabel, err := createPlankaLabelForBoard(board.ID, tags[tagID])
-									if err != nil {
-										log.Printf("Error creating label for tag %f: %v", tagID, err)
-										return
-									}
-
-									boardLabelsMutex.Lock()
-									boardLabels[tagID] = newLabel
-									label = newLabel
-									boardLabelsMutex.Unlock()
-								}
-
-								if err := createPlankaLabelForCard(cardId, label.Id); err != nil {
-									log.Printf("Error setting Planka label for card %s: %v", cardId, err)
-									return
-								}
-							}(tagID)
-						}
-
-						wg.Wait()
-					}
-					if len(card.Checklists) > 0 {
-						wg.Add(len(card.Checklists))
-
-						checklistSemaphore := make(chan struct{}, 3)
-
-						for _, checklistId := range card.Checklists {
-							go func(checklistId float64) {
-								defer wg.Done()
-
-								checklistSemaphore <- struct{}{}
-								defer func() { <-checklistSemaphore }()
-
-								kaitenList, err := getKaitenChecklistsForCard(card.ID, checklistId)
-								if err != nil {
-									log.Printf("Error getting checklist for card %s: %v", cardId, err)
-									return
-								}
-
-								listId, err := createPlankaTasklistForCard(cardId, kaitenList)
-								if err != nil {
-									log.Printf("Error creating tasklist for card %s: %v", cardId, err)
-									return
-								}
-
-								if len(kaitenList.Items) > 0 {
-									itemWg := &sync.WaitGroup{}
-									itemWg.Add(len(kaitenList.Items))
-
-									itemSemaphore := make(chan struct{}, 5)
-
-									for _, item := range kaitenList.Items {
-										go func(item KaitenChecklistItem) {
-											defer itemWg.Done()
-
-											itemSemaphore <- struct{}{}
-											defer func() { <-itemSemaphore }()
-
-											taskId, err := createPlankaTaskInTasklist(listId, item)
-											if err != nil {
-												log.Printf("Error creating task in checklist for card %s: %v", cardId, err)
-												return
-											}
-											log.Printf("Created task %s in checklist for card %s", taskId, cardId)
-										}(item)
-									}
-
-									itemWg.Wait()
-								}
-
-								log.Printf("Completed processing checklist %f for card %s", checklistId, cardId)
-							}(checklistId)
-						}
-
-						wg.Wait()
-					}
+					processCardChecklists(card, cardId)
 
 					comments, err := getKaitenCommentsForCard(card.ID)
 					if err == nil && comments != nil {
@@ -423,4 +333,108 @@ func main() {
 
 	}
 
+}
+
+func processCardChecklists(card KaitenCard, cardId string) {
+	if len(card.Checklists) > 0 {
+		checkListsWG := &sync.WaitGroup{}
+		checkListsWG.Add(len(card.Checklists))
+
+		checklistSemaphore := make(chan struct{}, 3)
+
+		for _, checklistId := range card.Checklists {
+			go func(checklistId float64) {
+				defer checkListsWG.Done()
+
+				checklistSemaphore <- struct{}{}
+				defer func() { <-checklistSemaphore }()
+
+				kaitenList, err := getKaitenChecklistsForCard(card.ID, checklistId)
+				if err != nil {
+					log.Printf("Error getting checklist for card %s: %v", cardId, err)
+					return
+				}
+
+				listId, err := createPlankaTasklistForCard(cardId, kaitenList)
+				if err != nil {
+					log.Printf("Error creating tasklist for card %s: %v", cardId, err)
+					return
+				}
+
+				if len(kaitenList.Items) > 0 {
+					itemWg := &sync.WaitGroup{}
+					itemWg.Add(len(kaitenList.Items))
+
+					itemSemaphore := make(chan struct{}, 5)
+
+					for _, item := range kaitenList.Items {
+						go func(item KaitenChecklistItem) {
+							defer itemWg.Done()
+
+							itemSemaphore <- struct{}{}
+							defer func() { <-itemSemaphore }()
+
+							taskId, err := createPlankaTaskInTasklist(listId, item)
+							if err != nil {
+								log.Printf("Error creating task in checklist for card %s: %v", cardId, err)
+								return
+							}
+							log.Printf("Created task %s in checklist for card %s", taskId, cardId)
+						}(item)
+					}
+
+					itemWg.Wait()
+				}
+
+				log.Printf("Completed processing checklist %f for card %s", checklistId, cardId)
+			}(checklistId)
+		}
+
+		checkListsWG.Wait()
+	}
+
+}
+
+func processCardTags(card KaitenCard, cardId string, boardId string, tags map[float64]KaitenTag) {
+	if card.TagIds != nil {
+		tagsWG := &sync.WaitGroup{}
+		tagsWG.Add(len(card.TagIds))
+		boardLabels := make(map[float64]PlankaLabel)
+		boardLabelsMutex := &sync.Mutex{}
+
+		semaphore := make(chan struct{}, 5)
+
+		for _, tagID := range card.TagIds {
+			go func(tagID float64) {
+				defer tagsWG.Done()
+
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+
+				boardLabelsMutex.Lock()
+				label, exists := boardLabels[tagID]
+				boardLabelsMutex.Unlock()
+
+				if !exists {
+					newLabel, err := createPlankaLabelForBoard(boardId, tags[tagID])
+					if err != nil {
+						log.Printf("Error creating label for tag %f: %v", tagID, err)
+						return
+					}
+
+					boardLabelsMutex.Lock()
+					boardLabels[tagID] = newLabel
+					label = newLabel
+					boardLabelsMutex.Unlock()
+				}
+
+				if err := createPlankaLabelForCard(cardId, label.Id); err != nil {
+					log.Printf("Error setting Planka label for card %s: %v", cardId, err)
+					return
+				}
+			}(tagID)
+		}
+
+		tagsWG.Wait()
+	}
 }
