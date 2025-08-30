@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -201,14 +202,6 @@ func plankaAPICall(jsonPayload []byte, endpoint string, method string) ([]byte, 
 }
 
 func plankaUploadFile(filepath string, url string, filename string) ([]byte, error) {
-	plankaUrl, err := getEnv("PLANKA_URL")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get PLANKA_URL: %w", err)
-	}
-	plankaToken, err := getEnv("PLANKA_TOKEN")
-	if err != nil {
-		return nil, fmt.Errorf("failed to get PLANKA_TOKEN: %w", err)
-	}
 
 	file, err := os.Open(filepath)
 	if err != nil {
@@ -239,7 +232,7 @@ func plankaUploadFile(filepath string, url string, filename string) ([]byte, err
 		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", plankaUrl+url, requestBody)
+	req, err := http.NewRequest("POST", plankaURL+url, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -269,12 +262,8 @@ func plankaUploadFile(filepath string, url string, filename string) ([]byte, err
 }
 
 func plankaAPICallByUser(jsonPayload []byte, url string, method string, token string) ([]byte, error) {
-	plankaUrl, exists := os.LookupEnv("PLANKA_URL")
-	if !exists {
-		return nil, fmt.Errorf("PLANKA_URL environment variable is not set")
-	}
 
-	req, err := http.NewRequest(method, plankaUrl+url, bytes.NewBuffer(jsonPayload))
+	req, err := http.NewRequest(method, plankaURL+url, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return nil, err
 	}
@@ -341,36 +330,127 @@ func plankaDeleteUser() error {
 }
 
 func deletePlankaProjects() error {
+	// Get all projects first
 	projects, err := getPlankaProjects()
 	if err != nil {
 		return fmt.Errorf("error fetching projects: %w", err)
 	}
 
-	for _, project := range projects {
-		log.Printf("Processing project: %s (ID: %s)", project.Name, project.ID)
-
-		boards, err := getPlankaBoardsForProject(project.ID)
-		if err != nil {
-			log.Printf("Skipping project %s due to error fetching boards: %v", project.Name, err)
-			continue
-		}
-
-		for _, boardID := range boards {
-			_, err := plankaAPICall(nil, "/api/boards/"+boardID, "DELETE")
-			if err != nil {
-				log.Printf("Failed to delete board %s in project %s: %v", boardID, project.Name, err)
-				continue
-			}
-			log.Printf("Deleted board %s in project %s", boardID, project.Name)
-		}
-
-		_, err = plankaAPICall(nil, "/api/projects/"+project.ID, "DELETE")
-		if err != nil {
-			log.Printf("Failed to delete project %s: %v", project.Name, err)
-			continue
-		}
-		log.Printf("Deleted project %s", project.Name)
+	if len(projects) == 0 {
+		log.Println("No projects found to delete")
+		return nil
 	}
+
+	log.Printf("Starting deletion of %d projects", len(projects))
+
+	// Create a worker pool for concurrent operations
+	const maxWorkers = 10
+	const maxConcurrentDeletions = 20
+
+	// Semaphore to limit concurrent operations
+	semaphore := make(chan struct{}, maxConcurrentDeletions)
+
+	// Error channel to collect errors from goroutines
+	errorChan := make(chan error, len(projects)*2) // *2 for boards + projects
+
+	// WaitGroup to wait for all operations to complete
+	var wg sync.WaitGroup
+
+	// Track deletion statistics
+	var (
+		successfulProjects int
+		failedProjects     int
+		successfulBoards   int
+		failedBoards       int
+		mu                 sync.Mutex
+	)
+
+	// Process each project concurrently
+	for _, project := range projects {
+		wg.Add(1)
+		go func(proj PlankaProject) {
+			defer wg.Done()
+
+			log.Printf("Processing project: %s (ID: %s)", proj.Name, proj.ID)
+
+			// Get boards for this project
+			boards, err := getPlankaBoardsForProject(proj.ID)
+			if err != nil {
+				log.Printf("Skipping project %s due to error fetching boards: %v", proj.Name, err)
+				mu.Lock()
+				failedProjects++
+				mu.Unlock()
+				errorChan <- fmt.Errorf("project %s: failed to fetch boards: %w", proj.Name, err)
+				return
+			}
+
+			// Delete boards concurrently with limited concurrency
+			if len(boards) > 0 {
+				var boardWg sync.WaitGroup
+				for _, boardID := range boards {
+					boardWg.Add(1)
+					go func(boardID string) {
+						defer boardWg.Done()
+
+						// Acquire semaphore
+						semaphore <- struct{}{}
+						defer func() { <-semaphore }()
+
+						// Delete board
+						_, err := plankaAPICall(nil, "/api/boards/"+boardID, "DELETE")
+						if err != nil {
+							log.Printf("Failed to delete board %s in project %s: %v", boardID, proj.Name, err)
+							mu.Lock()
+							failedBoards++
+							mu.Unlock()
+							errorChan <- fmt.Errorf("board %s in project %s: %w", boardID, proj.Name, err)
+						} else {
+							log.Printf("Deleted board %s in project %s", boardID, proj.Name)
+							mu.Lock()
+							successfulBoards++
+							mu.Unlock()
+						}
+					}(boardID)
+				}
+				boardWg.Wait()
+			}
+
+			// Delete project after all boards are processed
+			_, err = plankaAPICall(nil, "/api/projects/"+proj.ID, "DELETE")
+			if err != nil {
+				log.Printf("Failed to delete project %s: %v", proj.Name, err)
+				mu.Lock()
+				failedProjects++
+				mu.Unlock()
+				errorChan <- fmt.Errorf("project %s: %w", proj.Name, err)
+			} else {
+				log.Printf("Deleted project %s", proj.Name)
+				mu.Lock()
+				successfulProjects++
+				mu.Unlock()
+			}
+		}(project)
+	}
+
+	// Wait for all operations to complete
+	wg.Wait()
+	close(errorChan)
+
+	// Collect and report errors
+	var errors []string
+	for err := range errorChan {
+		errors = append(errors, err.Error())
+	}
+
+	// Log final statistics
+	log.Printf("Deletion completed. Projects: %d successful, %d failed. Boards: %d successful, %d failed",
+		successfulProjects, failedProjects, successfulBoards, failedBoards)
+
+	// Return combined error if any occurred
+	if len(errors) > 0 {
+		return fmt.Errorf("deletion completed with %d errors: %s", len(errors), strings.Join(errors, "; "))
+	}
+
 	return nil
 }
 
@@ -716,7 +796,7 @@ func createPlankaCommentForCard(cardId string, comment KaitenComment) error {
 }
 
 func createPlankaAttachmentForCard(cardId string, attachment KaitenAttachment) (string, error) {
-	outputFileName := attachment.Name
+	outputFileName := filepath.Base(attachment.URL)
 	outputFile, err := os.Create(outputFileName)
 	if err != nil {
 		return "", fmt.Errorf("error creating file: %w", err)
